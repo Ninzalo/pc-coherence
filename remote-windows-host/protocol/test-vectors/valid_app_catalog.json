@@ -6,7 +6,6 @@
     "schema_minor": 0,
     "kind": "app_catalog",
     "payload": {
-      "request_id": 3,
       "catalog_revision": 7,
       "entries": [
         {
@@ -29,7 +28,8 @@
           "icon_ref": "icons/see.png"
         }
       ]
-    }
+    },
+    "request_id": 3
   },
   "expected": "valid"
 }
