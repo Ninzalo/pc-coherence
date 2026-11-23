@@ -1,0 +1,34 @@
+# macOS
+.DS_Store
+
+# Builds
+build/
+out/
+*.build/
+DerivedData/
+.swiftpm/
+.cache/
+
+# Xcode user state
+xcuserdata/
+*.xcuserstate
+
+# Python
+__pycache__/
+*.pyc
+
+# Secrets — never commit (plan rule 11)
+*.pem
+*.key
+*.p12
+*.jks
+*.pairing.json
+pairing/
+
+# Windows
+vs/
+.vs/
+*.user
+
+# Logs
+*.log
