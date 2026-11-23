@@ -1,0 +1,418 @@
+// Canonical control schema for Remote Windows (Windows Host <-> macOS Client).
+//
+// Schema version: see VERSION in this directory (semver MAJOR.MINOR.PATCH).
+//
+// Wire format for v0.x (see docs/decisions/ADR-0002-wire-format-json-v010.md):
+//   Frame = 4-byte big-endian length prefix + UTF-8 JSON object.
+//   The JSON object is the JSON encoding of the `Envelope` message below:
+//     - message field names are exactly the proto field names;
+//     - enum values are lower_snake_case strings of the enum value names
+//       (without the enum-type prefix), e.g. PowerAction SLEEP -> "sleep";
+//     - absent fields are omitted; unknown fields MUST be ignored;
+//     - UUIDs and session/app IDs are strings; times are int64 Unix ms.
+// Binary protobuf framing is a later wire-format change and MUST bump the
+// protocol version.
+//
+// The .proto file is the canonical schema definition. The v0.1.0 runtime
+// codec implements this schema directly (JSON); see docs/PROTOCOL.md.
+
+syntax = "proto3";
+
+package remotewindows.v1;
+
+// ----------------------------------------------------------------- enums
+
+enum Capability {
+  CAPABILITY_UNSPECIFIED = 0;
+  CAPABILITY_APP_CATALOG = 1;
+  CAPABILITY_LAUNCH = 2;
+  CAPABILITY_MULTI_WINDOW = 3;
+  CAPABILITY_INPUT = 4;
+  CAPABILITY_RESIZE = 5;
+  CAPABILITY_POWER = 6;
+  CAPABILITY_AUXILIARY_WINDOWS = 7;
+}
+
+enum LaunchState {
+  LAUNCH_STATE_UNSPECIFIED = 0;
+  LAUNCH_STATE_ACCEPTED = 1;
+  LAUNCH_STATE_STARTING = 2;
+  LAUNCH_STATE_STARTED = 3;
+  LAUNCH_STATE_WINDOW_DETECTED = 4;
+  LAUNCH_STATE_FAILED = 5;
+}
+
+enum AppRunState {
+  APP_RUN_STATE_UNSPECIFIED = 0;
+  APP_RUN_STATE_RUNNING = 1;
+  APP_RUN_STATE_CLOSED = 2;
+  APP_RUN_STATE_UNKNOWN = 3;
+}
+
+enum AppType {
+  APP_TYPE_UNSPECIFIED = 0;
+  APP_TYPE_WIN32_SHORTCUT = 1;
+  APP_TYPE_PACKAGED = 2;
+  APP_TYPE_USER_ADDED = 3;
+}
+
+enum WindowRole {
+  WINDOW_ROLE_UNSPECIFIED = 0;
+  WINDOW_ROLE_MAIN = 1;
+  WINDOW_ROLE_DOCUMENT = 2;
+  WINDOW_ROLE_DIALOG = 3;
+  WINDOW_ROLE_FILE_PICKER = 4;
+  WINDOW_ROLE_POPUP = 5;
+  WINDOW_ROLE_TOOL = 6;
+  WINDOW_ROLE_UNKNOWN = 7;
+}
+
+enum WindowState {
+  WINDOW_STATE_UNSPECIFIED = 0;
+  WINDOW_STATE_NORMAL = 1;
+  WINDOW_STATE_MINIMIZED = 2;
+  WINDOW_STATE_MAXIMIZED = 3;
+  WINDOW_STATE_HIDDEN = 4;
+}
+
+enum WindowRemovalReason {
+  WINDOW_REMOVAL_REASON_UNSPECIFIED = 0;
+  WINDOW_REMOVAL_REASON_CLOSED = 1;
+  WINDOW_REMOVAL_REASON_UNAVAILABLE = 2;
+  WINDOW_REMOVAL_REASON_SOURCE_INVALIDATED = 3;
+  WINDOW_REMOVAL_REASON_SHARE_STOPPED = 4;
+}
+
+enum MouseKind {
+  MOUSE_KIND_UNSPECIFIED = 0;
+  MOUSE_KIND_MOVE = 1;
+  MOUSE_KIND_DOWN = 2;
+  MOUSE_KIND_UP = 3;
+  MOUSE_KIND_DOUBLE_CLICK = 4;
+  MOUSE_KIND_WHEEL = 5;
+}
+
+enum MouseButton {
+  MOUSE_BUTTON_UNSPECIFIED = 0;
+  MOUSE_BUTTON_LEFT = 1;
+  MOUSE_BUTTON_RIGHT = 2;
+  MOUSE_BUTTON_MIDDLE = 3;
+}
+
+enum WindowActionKind {
+  WINDOW_ACTION_KIND_UNSPECIFIED = 0;
+  WINDOW_ACTION_KIND_ACTIVATE = 1;
+  WINDOW_ACTION_KIND_MINIMIZE = 2;
+  WINDOW_ACTION_KIND_RESTORE = 3;
+  WINDOW_ACTION_KIND_STOP_STREAMING = 4;
+  WINDOW_ACTION_KIND_REQUEST_CLOSE = 5;
+}
+
+enum WindowActionResultState {
+  WINDOW_ACTION_RESULT_STATE_UNSPECIFIED = 0;
+  WINDOW_ACTION_RESULT_STATE_OK = 1;
+  WINDOW_ACTION_RESULT_STATE_DENIED = 2;
+  WINDOW_ACTION_RESULT_STATE_FAILED = 3;
+}
+
+enum FrameRateReason {
+  FRAME_RATE_REASON_UNSPECIFIED = 0;
+  FRAME_RATE_REASON_FOCUS_CHANGED = 1;
+  FRAME_RATE_REASON_DISPLAY_CHANGED = 2;
+  FRAME_RATE_REASON_MINIMIZED = 3;
+  FRAME_RATE_REASON_RESTORED = 4;
+  FRAME_RATE_REASON_USER_CAP = 5;
+  FRAME_RATE_REASON_RESUMED = 6;
+}
+
+enum StreamState {
+  STREAM_STATE_UNSPECIFIED = 0;
+  STREAM_STATE_IDLE = 1;
+  STREAM_STATE_RUNNING = 2;
+  STREAM_STATE_DEGRADED = 3;
+  STREAM_STATE_STOPPED = 4;
+  STREAM_STATE_ERROR = 5;
+}
+
+enum PowerAction {
+  POWER_ACTION_UNSPECIFIED = 0;
+  POWER_ACTION_SLEEP = 1;
+  POWER_ACTION_SHUTDOWN = 2;
+}
+
+enum PowerResultState {
+  POWER_RESULT_STATE_UNSPECIFIED = 0;
+  POWER_RESULT_STATE_ACCEPTED = 1;
+  POWER_RESULT_STATE_DENIED = 2;
+  POWER_RESULT_STATE_FAILED = 3;
+}
+
+// ------------------------------------------------------------- messages
+
+message Hello {
+  // "windows-host" | "macos-client"
+  string product_name = 1;
+  string app_version = 2;
+  repeated Capability capabilities = 3;
+}
+
+// Direction-agnostic pairing message.
+// Host -> Client after HELLO: carries challenge_nonce + host_name.
+// Client -> Host: carries the one-time code typed by the user plus the
+// echoed challenge_nonce.
+message PairingChallenge {
+  // Exactly 6 ASCII digits when present (host-generated one-time code).
+  string one_time_code = 1;
+  // Windows PC display name, 1..64 chars.
+  string host_name = 2;
+  // 32 lowercase hex chars, host-generated, echoed back by the client.
+  string challenge_nonce = 3;
+}
+
+message PairingResult {
+  bool accepted = 1;
+  string error_code = 2;
+  // User-safe description; never contains secrets.
+  string safe_message = 3;
+}
+
+message AppCatalogRequest {
+  // Host may ignore repeated requests within a short interval; the catalog
+  // is pushed via APP_CATALOG_CHANGED, so rescan is not required.
+  bool force_rescan = 1;
+}
+
+message AppEntry {
+  // Host-generated stable identity; resolved only through the Host catalog.
+  string app_id = 1;
+  string display_name = 2;
+  AppType type = 3;
+  // Host-local icon reference. The Client must never treat it as an
+  // executable path.
+  string icon_ref = 4;
+  bool available = 5;
+}
+
+message AppCatalog {
+  uint32 catalog_revision = 1;
+  repeated AppEntry entries = 2;
+}
+
+message AppCatalogChanged {
+  uint32 catalog_revision = 1;
+}
+
+message LaunchApp {
+  string app_id = 1;
+}
+
+message LaunchResult {
+  string app_id = 1;
+  LaunchState state = 2;
+  string error_code = 3;
+  string safe_message = 4;
+  // Set from STARTING onward; identifies the application session that owns
+  // the launched process(es) and their windows.
+  string application_session_id = 5;
+}
+
+message AppStatus {
+  string app_id = 1;
+  AppRunState state = 2;
+  string application_session_id = 3;
+}
+
+message WindowAnnounce {
+  // UUID v4 assigned by the Host. Native HWND values are never transmitted
+  // (Windows may reuse handles).
+  string window_id = 1;
+  // Owning application session (always present).
+  string application_session_id = 2;
+  // Present when the window is related to another streamed window.
+  optional string parent_window_id = 3;
+  optional string owner_window_id = 4;
+  WindowRole role = 5;
+  bool modal = 6;
+  bool visible = 7;
+  int32 z_order = 8;
+  string title = 9;
+  // Source client-area geometry in Windows pixels.
+  int32 x = 10;
+  int32 y = 11;
+  uint32 width_px = 12;
+  uint32 height_px = 13;
+  // 25..400 (percent).
+  uint32 dpi_scale_percent = 14;
+  WindowState state = 15;
+}
+
+message WindowUpdate {
+  string window_id = 1;
+  optional string title = 2;
+  optional int32 x = 3;
+  optional int32 y = 4;
+  optional uint32 width_px = 5;
+  optional uint32 height_px = 6;
+  optional WindowState state = 7;
+  optional bool modal = 8;
+  optional bool visible = 9;
+  optional bool active = 10;
+  optional uint32 dpi_scale_percent = 11;
+}
+
+message WindowRemove {
+  string window_id = 1;
+  WindowRemovalReason reason = 2;
+}
+
+message MouseInput {
+  MouseKind kind = 1;
+  MouseButton button = 2;
+  // Windows client-area pixels of the target window.
+  int32 x = 3;
+  int32 y = 4;
+  // Signed wheel delta in lines (positive = up).
+  int32 wheel_delta = 5;
+}
+
+// KeyInput modifier bit constants:
+//   WIN_MOD_SHIFT   = 0x1
+//   WIN_MOD_CONTROL = 0x2
+//   WIN_MOD_ALT     = 0x4
+//   WIN_MOD_WIN     = 0x8
+message KeyInput {
+  // Windows virtual-key code, 1..0xFF.
+  uint32 windows_vk = 1;
+  // Bitmask of WIN_MOD_* (0..0xF) at event time.
+  uint32 modifier_bits = 2;
+  bool key_down = 3;
+  bool is_repeat = 4;
+}
+
+message InputEvent {
+  string window_id = 1;
+  oneof input {
+    MouseInput mouse = 2;
+    KeyInput key = 3;
+  }
+}
+
+message ResizeRequest {
+  string window_id = 1;
+  uint32 client_width_px = 2;
+  uint32 client_height_px = 3;
+}
+
+message ResizeAck {
+  string window_id = 1;
+  bool ok = 2;
+  // Actual source dimensions after the operation.
+  uint32 actual_width_px = 3;
+  uint32 actual_height_px = 4;
+  string error_code = 5;
+}
+
+message WindowAction {
+  string window_id = 1;
+  WindowActionKind kind = 2;
+}
+
+message WindowActionResult {
+  string window_id = 1;
+  WindowActionKind kind = 2;
+  WindowActionResultState state = 3;
+  string error_code = 4;
+  string safe_message = 5;
+}
+
+message FrameRateRequest {
+  string window_id = 1;
+  // 0 = paused. Range 0..240.
+  uint32 target_fps = 2;
+  FrameRateReason reason = 3;
+}
+
+message StreamStatus {
+  string window_id = 1;
+  StreamState state = 2;
+  uint32 width_px = 3;
+  uint32 height_px = 4;
+  double actual_fps = 5;
+  string error_code = 6;
+}
+
+message SystemPowerRequest {
+  // Only SLEEP or SHUTDOWN are legal. No arbitrary commands exist in this
+  // protocol.
+  PowerAction action = 1;
+}
+
+message SystemPowerResult {
+  PowerAction action = 1;
+  PowerResultState state = 2;
+  string error_code = 3;
+  string safe_message = 4;
+}
+
+message Heartbeat {
+  int64 sender_time_ms = 1;
+}
+
+message PerformanceStats {
+  string window_id = 1;
+  double fps = 2;
+  uint32 bitrate_kbps = 3;
+  uint32 dropped_frames = 4;
+  uint64 capture_to_encode_ms = 5;
+  uint64 encode_ms = 6;
+}
+
+// ------------------------------------------------------------- envelope
+
+message Envelope {
+  // 1 for all v0.x. Receivers MUST reject frames with a different major.
+  uint32 schema_major = 1;
+  uint32 schema_minor = 2;
+  // One of the 23 kind strings (lower_snake_case of the payload type):
+  // hello, pairing_challenge, pairing_result, app_catalog_request,
+  // app_catalog, app_catalog_changed, launch_app, launch_result, app_status,
+  // window_announce, window_update, window_remove, input_event,
+  // resize_request, resize_ack, window_action, window_action_result,
+  // frame_rate_request, stream_status, system_power_request,
+  // system_power_result, heartbeat, performance_stats.
+  string kind = 3;
+  // Required on request messages (app_catalog_request, launch_app,
+  // resize_request, window_action, system_power_request,
+  // frame_rate_request) and MUST be echoed on the corresponding result
+  // (app_catalog, launch_result, resize_ack, window_action_result,
+  // system_power_result).
+  optional uint32 request_id = 4;
+  // Required, strictly increasing per sender connection on: input_event,
+  // resize_request, window_action, system_power_request.
+  optional uint64 sequence = 5;
+  oneof payload {
+    Hello hello = 6;
+    PairingChallenge pairing_challenge = 7;
+    PairingResult pairing_result = 8;
+    AppCatalogRequest app_catalog_request = 9;
+    AppCatalog app_catalog = 10;
+    AppCatalogChanged app_catalog_changed = 11;
+    LaunchApp launch_app = 12;
+    LaunchResult launch_result = 13;
+    AppStatus app_status = 14;
+    WindowAnnounce window_announce = 15;
+    WindowUpdate window_update = 16;
+    WindowRemove window_remove = 17;
+    InputEvent input_event = 18;
+    ResizeRequest resize_request = 19;
+    ResizeAck resize_ack = 20;
+    WindowAction window_action = 21;
+    WindowActionResult window_action_result = 22;
+    FrameRateRequest frame_rate_request = 23;
+    StreamStatus stream_status = 24;
+    SystemPowerRequest system_power_request = 25;
+    SystemPowerResult system_power_result = 26;
+    Heartbeat heartbeat = 27;
+    PerformanceStats performance_stats = 28;
+  }
+}

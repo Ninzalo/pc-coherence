@@ -1,0 +1,19 @@
+{
+  "id": "valid_input_mouse_move",
+  "description": "Pointer move with no button",
+  "envelope": {
+    "schema_major": 1,
+    "schema_minor": 0,
+    "kind": "input_event",
+    "payload": {
+      "window_id": "3f2b8c1e-9a4d-4e6f-8b7c-1d2e3f4a5b6c",
+      "mouse": {
+        "kind": "move",
+        "x": 120,
+        "y": 340
+      }
+    },
+    "sequence": 42
+  },
+  "expected": "valid"
+}

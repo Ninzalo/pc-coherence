@@ -1,0 +1,13 @@
+{
+  "id": "valid_heartbeat",
+  "description": "Heartbeat",
+  "envelope": {
+    "schema_major": 1,
+    "schema_minor": 0,
+    "kind": "heartbeat",
+    "payload": {
+      "sender_time_ms": 1700000000000
+    }
+  },
+  "expected": "valid"
+}

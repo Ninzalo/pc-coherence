@@ -1,0 +1,16 @@
+{
+  "id": "invalid_system_power_reboot",
+  "description": "Only SLEEP or SHUTDOWN are legal power actions",
+  "envelope": {
+    "schema_major": 1,
+    "schema_minor": 0,
+    "kind": "system_power_request",
+    "payload": {
+      "action": "reboot"
+    },
+    "request_id": 32,
+    "sequence": 46
+  },
+  "expected": "invalid",
+  "violation": "invalid_enum"
+}

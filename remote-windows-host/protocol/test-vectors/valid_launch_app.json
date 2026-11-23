@@ -1,0 +1,14 @@
+{
+  "id": "valid_launch_app",
+  "description": "Launch by app_id with request id",
+  "envelope": {
+    "schema_major": 1,
+    "schema_minor": 0,
+    "kind": "launch_app",
+    "payload": {
+      "app_id": "a0123456789abcdef"
+    },
+    "request_id": 11
+  },
+  "expected": "valid"
+}

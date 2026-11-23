@@ -1,0 +1,12 @@
+{
+  "id": "invalid_unknown_kind",
+  "description": "kind must be one of the 23 known kinds",
+  "envelope": {
+    "schema_major": 1,
+    "schema_minor": 0,
+    "kind": "teleport",
+    "payload": {}
+  },
+  "expected": "invalid",
+  "violation": "unknown_kind"
+}

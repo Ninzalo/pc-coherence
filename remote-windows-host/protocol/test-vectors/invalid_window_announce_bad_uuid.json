@@ -1,0 +1,20 @@
+{
+  "id": "invalid_window_announce_bad_uuid",
+  "description": "window_id must be a UUID string",
+  "envelope": {
+    "schema_major": 1,
+    "schema_minor": 0,
+    "kind": "window_announce",
+    "payload": {
+      "window_id": "not-a-uuid",
+      "application_session_id": "sess-0001",
+      "role": "dialog",
+      "visible": true,
+      "title": "x",
+      "width_px": 800,
+      "height_px": 600
+    }
+  },
+  "expected": "invalid",
+  "violation": "bad_uuid"
+}

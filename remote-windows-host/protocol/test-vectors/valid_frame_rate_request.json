@@ -1,0 +1,16 @@
+{
+  "id": "valid_frame_rate_request",
+  "description": "Pause via target_fps 0 (minimized)",
+  "envelope": {
+    "schema_major": 1,
+    "schema_minor": 0,
+    "kind": "frame_rate_request",
+    "payload": {
+      "window_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+      "target_fps": 0,
+      "reason": "minimized"
+    },
+    "request_id": 22
+  },
+  "expected": "valid"
+}

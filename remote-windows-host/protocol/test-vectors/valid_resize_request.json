@@ -1,0 +1,17 @@
+{
+  "id": "valid_resize_request",
+  "description": "Resize request with dimensions",
+  "envelope": {
+    "schema_major": 1,
+    "schema_minor": 0,
+    "kind": "resize_request",
+    "payload": {
+      "window_id": "3f2b8c1e-9a4d-4e6f-8b7c-1d2e3f4a5b6c",
+      "client_width_px": 1920,
+      "client_height_px": 1080
+    },
+    "request_id": 21,
+    "sequence": 44
+  },
+  "expected": "valid"
+}

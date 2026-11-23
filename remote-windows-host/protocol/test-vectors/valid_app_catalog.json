@@ -1,0 +1,35 @@
+{
+  "id": "valid_app_catalog",
+  "description": "Catalog with three entries",
+  "envelope": {
+    "schema_major": 1,
+    "schema_minor": 0,
+    "kind": "app_catalog",
+    "payload": {
+      "request_id": 3,
+      "catalog_revision": 7,
+      "entries": [
+        {
+          "app_id": "a0123456789abcdef",
+          "display_name": "File Explorer",
+          "type": "win32_shortcut",
+          "available": true
+        },
+        {
+          "app_id": "a000000000000001",
+          "display_name": "Microsoft Access",
+          "type": "win32_shortcut",
+          "available": true
+        },
+        {
+          "app_id": "a000000000000002",
+          "display_name": "SEE Electrical",
+          "type": "user_added",
+          "available": true,
+          "icon_ref": "icons/see.png"
+        }
+      ]
+    }
+  },
+  "expected": "valid"
+}

@@ -1,0 +1,27 @@
+{
+  "id": "valid_window_announce_auxiliary_cross_process",
+  "description": "Auxiliary file picker announced with parent/owner and modality; cross-process hosting is legal (no PID on the wire)",
+  "envelope": {
+    "schema_major": 1,
+    "schema_minor": 0,
+    "kind": "window_announce",
+    "payload": {
+      "window_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+      "application_session_id": "sess-0001",
+      "parent_window_id": "3f2b8c1e-9a4d-4e6f-8b7c-1d2e3f4a5b6c",
+      "owner_window_id": "3f2b8c1e-9a4d-4e6f-8b7c-1d2e3f4a5b6c",
+      "role": "file_picker",
+      "modal": true,
+      "visible": true,
+      "z_order": 7,
+      "title": "Open",
+      "x": 100,
+      "y": 200,
+      "width_px": 800,
+      "height_px": 600,
+      "dpi_scale_percent": 150,
+      "state": "normal"
+    }
+  },
+  "expected": "valid"
+}
