@@ -1,0 +1,54 @@
+cmake_minimum_required(VERSION 3.20)
+project(remote_windows_host CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "Build type" FORCE)
+endif()
+
+# --- pinned vendored dependencies (see docs/DEPENDENCIES.md) -------------
+add_subdirectory(vendor/googletest EXCLUDE_FROM_ALL)
+# Make gtest_discover_tests() (GoogleTest.cmake) findable from subprojects.
+list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/vendor/googletest)
+add_library(nlohmann_json INTERFACE)
+target_include_directories(nlohmann_json INTERFACE
+  ${CMAKE_CURRENT_SOURCE_DIR}/vendor/nlohmann_json/include)
+
+# --- portable core (builds on macOS/Linux and Windows) -------------------
+add_library(rwh_core STATIC
+  core/sha256.cpp
+  core/protocol_version.cpp
+  core/protocol_types.cpp
+  core/protocol_json.cpp
+  core/protocol_validation.cpp
+  core/fps_policy.cpp
+  core/catalog.cpp
+  core/window_relationships.cpp
+  core/input.cpp
+  core/pairing.cpp
+  core/power_policy.cpp
+  core/authorization.cpp)
+target_include_directories(rwh_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(rwh_core PUBLIC nlohmann_json)
+
+# --- portable LAN signaling (TCP framing + server/client) ----------------
+add_library(rwh_network STATIC
+  network/tcp_socket.cpp
+  network/framing.cpp
+  network/signaling_server.cpp
+  network/signaling_client.cpp)
+target_link_libraries(rwh_network PUBLIC rwh_core)
+
+# --- portable probe binary (dev/test helper; also used to prove a remote
+#     build/test runner end-to-end: serve on Windows, connect from macOS)
+add_executable(rwh-signaling-probe app/signaling_probe.cpp)
+target_link_libraries(rwh-signaling-probe PRIVATE rwh_network)
+
+# --- Windows-only targets --------------------------------------------------
+# win32/ adapters (capture, windows, input, power, catalog) and the tray
+# app shell compile only with MSVC + Windows SDK. They are intentionally
+# absent from the portable build; see docs/STATUS.md (NOT RUN on macOS).
+
+enable_testing()
+add_subdirectory(tests)

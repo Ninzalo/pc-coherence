@@ -79,6 +79,9 @@ Common:
 - enums: unknown string values → frame invalid.
 - numeric ranges as listed; out of range → frame invalid (drop + counter,
   never crash).
+- The Host JSON codec enforces the `window_id` UUID format and the `title`
+  length bound at decode time: violations are rejected with the error codes
+  `bad_uuid` and `title_too_long` respectively, before any routing.
 
 | field | rule |
 |---|---|
