@@ -40,6 +40,22 @@ add_library(rwh_network STATIC
   network/signaling_client.cpp)
 target_link_libraries(rwh_network PUBLIC rwh_core)
 
+# --- portable media core (RW-H-007, PROTOCOL §9) --------------------------
+# Binary framing, per-window stream keys (§9.3), stream registry (§9.5),
+# HMAC-SHA256 (§9.2 handshake). Builds and unit-tests on any host.
+add_library(rwh_media STATIC
+  media/media_framing.cpp
+  media/stream_keys.cpp
+  media/stream_registry.cpp
+  media/hmac_sha256.cpp)
+target_link_libraries(rwh_media PUBLIC rwh_core)
+if(WIN32)
+  # Windows CNG AES-256-GCM backend (WIN32-only translation unit; the
+  # class is declared in media/aead_cng.hpp under #ifdef _WIN32).
+  target_sources(rwh_media PRIVATE media/aead_cng.cpp)
+  target_link_libraries(rwh_media PRIVATE bcrypt)
+endif()
+
 # --- portable probe binary (dev/test helper; also used to prove a remote
 #     build/test runner end-to-end: serve on Windows, connect from macOS)
 add_executable(rwh-signaling-probe app/signaling_probe.cpp)

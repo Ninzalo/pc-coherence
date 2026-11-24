@@ -13,6 +13,7 @@ VERIFIED — see "LAN end-to-end pairing (verified)" below).
 | `app/` session authorization + pairing state machine (RW-H-004, H-NET): per-connection `SessionAuth` (unpaired/pairing/paired/locked), shared `PairingHost` one-time-code store (single use), typed `not_paired` rejections for gated control kinds, post-pairing empty catalog, extended `--selftest` full handshake; tray pairing-code display/rotation (RW-H-005, H-FOUND) | `session_auth_test` (21 tests: 16 state-machine + 2 PairingHost rotation + 3 loopback e2e; the 3 RW-H-005 tests added 2026-11-24) + `--selftest` report (evidence below) |
 | `docs/PROTOCOL.md` framing, validation, authorization, lifecycle rules | present, normative for both peers; codec now enforces `window_id` UUID format and `title` ≤ 512 chars at decode time (`bad_uuid` / `title_too_long`) |
 | Media channel normative spec (RW-H-006, CONTRACT): PROTOCOL §9 — TCP 47988, handshake, key derivation (matching `core/pairing.cpp`), little-endian binary framing, stream lifecycle, robustness, security (ADR-0008) + golden vectors `protocol/test-vectors/media/` (3× AES-256-GCM + key derivation; generated with CryptoKit, independently re-verified with pyca/cryptography, OpenSSL 3.5.9 EVP, and shasum CLI) | `bash tools/export_protocol.sh <dir>` → bundle incl. `test-vectors/media/*.json` in SHA256SUMS (27 entries, verified); Client snapshot re-synced via `tools/sync_protocol_from_host.sh` (`shasum -a 256 -c` OK); §7.4 session-key formula corrected to the implemented `rwh-pairing-v1\|code\|host_name`; stale WebRTC note in §1 removed |
+| `media/` portable media core (RW-H-007, H-MEDIA): the machine-facing parts of PROTOCOL §9 — binary packet framing (§9.4, 13-byte LE header, exact-byte unit test), per-window stream key / nonce-prefix derivation (§9.3, golden `key-derivation.json` reproduced exactly), thread-safe stream registry (§9.5, per-stream `core::FpsGate`, 16-bit collision documented: last add wins), RFC 2104 HMAC-SHA256 (§9.2 handshake, RFC 4231 TC1/TC2), portable `IAead` interface + Windows CNG AES-256-GCM backend (`AeadCng`, WIN32-only TU, `aes-256-gcm.json` vectors are runner-only) | 127/127 CTest (previous 104 + 23 new media tests, command below); CNG backend test NOT RUN on macOS (Win32-only, entry below) |
 | ADRs 0001–0009 | `docs/decisions/` (0008: MVP media transport — TCP 47988, H.264, AES-256-GCM, WebRTC deferred; 0009: single-repo topology deviation from plan §4.3) |
 
 ## Last successful build (this tree, portable core on macOS)
@@ -24,14 +25,22 @@ cmake --build remote-windows-host/build -j
 ctest --test-dir remote-windows-host/build --output-on-failure
 ```
 Result: 2026-11-24, macOS 27.2.1, CMake 4.5.1,
-Ninja 1.13.2, clang (Apple). Build clean (exit 0). **104/104 tests
-PASSED** (0 failed). Suites:
+Ninja 1.13.2, clang (Apple). Build clean (exit 0). **127/127 tests
+PASSED** (previous 104 + 23 new media-core tests, 0 failed). Suites:
 sha256, protocol_version, protocol_json (incl. 22 canonical test vectors),
 validation, fps_policy, catalog, window_relationships, input, pairing,
 power_policy, authorization, framing, signaling_e2e, session_auth
 (21 tests: 16 state-machine + 2 PairingHost rotation + 3 loopback e2e
 over the real SignalingServer/Client; 3 new in RW-H-005 covering
-rotation-after-consume and the tray rotate path).
+rotation-after-consume and the tray rotate path), plus the RW-H-007
+media suites: media_framing (9: exact 13-byte wire header, round-trip,
+short/bad-magic/bad-version/oversize rejection, stream_id = first 2
+sha256 bytes LE, nonce layout), media_stream_keys (3: every field of
+`protocol/test-vectors/media/key-derivation.json` reproduced exactly),
+media_stream_registry (8: add/find/remove, idempotent add resets
+counters, distinct ids, findByStreamId, collision last-add-wins,
+FpsGate core defaults), hmac_sha256 (3: RFC 4231 TC1/TC2 + §9.2-shaped
+self-consistency).
 
 ## Windows runner (Section 18.4) — verified
 
@@ -278,6 +287,14 @@ Windows runner (DESKTOP-PC), 2026-11-24:
   input (SendInput), power (SetSuspendState / InitiateSystemShutdownExW),
   catalog scan (IShellLinkW). **NOT RUN** — not implemented yet (next
   feature tracks: H-CATALOG, then H-MEDIA/H-WINDOWS/H-INPUT/H-POWER).
+- `media/aead_cng.cpp` + `tests/media_aead_cng_test.cpp` (RW-H-007):
+  Windows CNG (BCrypt*) AES-256-GCM backend for the media channel.
+  **NOT RUN on macOS** — WIN32-only translation unit, deliberately not
+  compiled on macOS (CMake `if(WIN32)`). The test reproduces ALL three
+  golden vectors in `protocol/test-vectors/media/aes-256-gcm.json`
+  (ciphertext AND tag), plus a 1000-byte seal→open round-trip and
+  tamper detection (tampered ciphertext byte, tampered tag byte, wrong
+  nonce) — to be run via the Windows runner.
 
 ## Blocked
 
@@ -287,19 +304,19 @@ Windows runner (DESKTOP-PC), 2026-11-24:
 
 ## Next tasks
 
-1. **RW-H-007 (H-MEDIA): portable media core** — new `media/` library:
-   binary packet framing (PROTOCOL §9.4), stream key derivation (§9.3,
-   golden vectors in `protocol/test-vectors/media/`), stream registry
-   (per-stream FPS gate from `core/fps_policy`), HMAC-SHA256 (for the
-   §9.2 handshake), and the Windows CNG AES-256-GCM backend (runner-only
-   test against the golden vectors). Portable parts must pass on macOS.
-2. H-CATALOG: Start Menu scan + `LAUNCH_APP` by allow-listed `app_id`
+1. H-CATALOG: Start Menu scan + `LAUNCH_APP` by allow-listed `app_id`
    (IShellLinkW / ShellExecuteExW) — the Client already sends
    `app_catalog_request` on pairing and renders "No applications
    available yet" while the catalog is empty.
 
 Done:
 
+- H-MEDIA: portable media core (RW-H-007) — DONE 2026-11-24
+  (branch `agent/H-MEDIA/RW-H-007`; `media/` library: §9.4 framing,
+  §9.3 key derivation with the golden `key-derivation.json` reproduced
+  exactly, §9.5 stream registry, §9.2 HMAC-SHA256, `IAead` + CNG
+  backend; 127/127 macOS ctest — previous 104 + 23 new. CNG backend
+  test NOT RUN on macOS (Win32-only; Windows runner pending).)
 - Windows runner (Section 18.4) — DONE 2026-11-24 (evidence above).
 - CONTRACT: first contract bundle export + Client snapshot sync —
   DONE 2026-11-24 (client `docs/STATUS.md`).
