@@ -7,6 +7,10 @@
 // 'probe-tray' action (not part of the shipped product, not linked
 // into rwh-host). Prints one line per test; no window contents or
 // user data are touched (AGENTS rule 9).
+#ifndef UNICODE
+#define UNICODE
+#define _UNICODE
+#endif
 #include <windows.h>
 
 #include <cstdarg>
