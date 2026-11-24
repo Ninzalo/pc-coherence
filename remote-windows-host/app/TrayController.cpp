@@ -79,7 +79,7 @@ void TrayController::showStatus() {
   TrayStatus s = statusFn_();
   wchar_t text[192];
   wsprintfW(text, format, (UINT)s.port, (UINT)s.connections);
-  MessageBoxW(hwnd_, text, L"Remote Windows Host", MB_OK | MB_ICON_INFORMATION);
+  MessageBoxW(hwnd_, text, L"Remote Windows Host", MB_OK | MB_ICONINFORMATION);
 }
 
 int TrayController::run() {
