@@ -184,32 +184,36 @@ Windows runner (DESKTOP-PC), 2026-11-24:
 | Item | Evidence |
 |---|---|
 | Runner health | `windows-runner.sh status` → `RWH status=ok`, `RWH host=DESKTOP-PC`, `RWH cmake=cmake version 4.5.1`, `RWH ninja=1.13.2`, `RWH git=git version 2.54.0.windows.1` (exit 0) |
-| `prepare` / `unit-tests` / `selftest` at this SHA | **NOT RUN** — the branch is intentionally not pushed (task constraint), and `windows_runner.ps1 prepare` fetches only from `origin` (github.com/Ninzalo/pc-coherence.git), so an unpushed SHA cannot be checked out. The `rwh-host` Win32 target (TrayController + en-US.rc changes) does not compile on macOS, so the runner is the only compile check for this delta; it will run at this SHA once the orchestrator allows a push (or via `git bundle` if the allow-list ever permits it). |
+| `prepare` at `2236750` | `RWH status=prepared`, `RWH sha=2236750c4746aa1634342668ca9664fffaec7d1d` (exit 0) — the Win32 `rwh-host` delta (TrayController + en-US.rc) compiles on MSVC |
+| `unit-tests` at `2236750` | `100% tests passed out of 104`, `RWH ctest_exit=0`, `RWH status=tests_ok` (exit 0; incl. the 3 new RW-H-005 rotation tests) |
+| `selftest` at `2236750` | `{"selftest":true,"passed":true,"port":47987,"reply_kind":"app_catalog","envelopes":3,"pairing":"accepted","reply_kinds":"hello;pairing_challenge;pairing_result;app_catalog"}`, `RWH selftest_exit=0`, `RWH status=selftest_ok` (exit 0) |
 
 ## Implemented, NOT verified on Windows
 
 - Win32 adapters (`win32/`): capture (WGC), window registry/events,
   input (SendInput), power (SetSuspendState / InitiateSystemShutdownExW),
   catalog scan (IShellLinkW). **NOT RUN** — not implemented yet (next
-  stages after H-NET pairing/session work).
+  feature tracks: H-CATALOG, then H-MEDIA/H-WINDOWS/H-INPUT/H-POWER).
 
 ## Blocked
 
 | Task | Blocker |
 |---|---|
 | Stage 1 one-window video end-to-end | WebRTC pinned build not integrated (see DEPENDENCIES.md) |
-| Real pairing/LAN integration test with the macOS Client | Host side DONE (RW-H-004); Client connection/pairing counterpart (C-CONNECTION) not implemented |
+| Real pairing/LAN integration test with the macOS Client | Both sides implemented and unit-verified (Host RW-H-004/RW-H-005 at `2236750`; Client RW-C-001 at `640d673`). Remaining step is interactive: run `rwh-host.exe` in the logged-on Windows desktop session, read the one-time code from the tray "Show pairing code..." dialog, and enter it in the macOS Client. A manual step, not a runner step. |
 
 ## Next tasks
 
-1. LAN end-to-end pairing test with the macOS Client — Host side is
-   READY (RW-H-005: the tray shows/rotates the one-time code; the full
-   handshake is verified at unit + loopback e2e level). Requires the
-   C-CONNECTION Client counterpart (item 2) and an interactive Host
-   session (GUI tray runtime is NOT RUN from the runner).
-2. C-CONNECTION: macOS Client connection/pairing counterpart (pairs
-   against the Host handshake verified in RW-H-004); per orchestrator,
-   H-MEDIA (capture/video) is the parallel Host track.
+1. LAN end-to-end pairing test with the macOS Client — both sides are
+   implemented and unit-verified (Host RW-H-004/RW-H-005 at `2236750`;
+   Client RW-C-001 at `640d673`). Remaining step: run `rwh-host.exe`
+   in the interactive Windows desktop session, read the one-time code
+   from the tray "Show pairing code..." dialog, enter it in the macOS
+   Client, and confirm `session.pairing ... accepted=true` in the Host
+   log. Manual/interactive — not a runner step.
+2. H-CATALOG: Start Menu scan + `LAUNCH_APP` by allow-listed `app_id`
+   (IShellLinkW / ShellExecuteExW) — the next Host feature track; per
+   orchestrator, H-MEDIA (capture/video) is the parallel Host track.
 
 Done:
 
@@ -222,7 +226,6 @@ Done:
   signaling channel (RW-H-004) — DONE 2026-11-24 at `870aec1`
   (101/101 macOS + Windows runner unit-tests/selftest, evidence above).
 - H-FOUND: tray pairing-code display/rotation + pairing session state
-  (RW-H-005) — DONE 2026-11-24 (evidence above; 104/104 macOS ctest.
-  Win32 runner verification at this SHA is NOT RUN: branch
-  intentionally not pushed and the runner's `prepare` fetches only
-  from origin — to re-run once a push is authorized).
+  (RW-H-005) — DONE 2026-11-24 at `2236750` (104/104 macOS ctest;
+  Windows runner prepare/unit-tests/selftest all OK at `2236750`,
+  evidence in the RW-H-005 runner table above).
