@@ -49,9 +49,13 @@ class TrayController {
     return window_fallback_ ? "hidden" : "msgonly";
   }
 
- private:
+  // Public so the --probe-tray bisect can reproduce the exact tray
+  // window setup (class name + wndProc) and isolate the creation
+  // failure (2026-11-24 diagnosis).
   static LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wParam,
                                   LPARAM lParam);
+
+ private:
   void showMenu(HWND hwnd);
   void showStatus();
   void showPairingCode();

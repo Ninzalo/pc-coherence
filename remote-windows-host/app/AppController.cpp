@@ -169,6 +169,55 @@ int AppController::runProbeTray(const Options& opts) {
   log.write(LogLevel::Info, "probe.d_ctrl_handler",
             {{"window", probeWindow(L"RWHProbeD")}});
 
+  // e/f/g/h: replicate the exact TrayController::run() window setup to
+  // isolate which element (class name / wndProc / lpCreateParams /
+  // title) breaks creation — d above passed with DefWindowProc + fresh
+  // names + nullptr param + title L"rwh-probe".
+  struct ProbeParam {
+    int x;
+  };
+  ProbeParam param{0};
+  struct ProbeCase {
+    const char* label;
+    const wchar_t* cls;
+    const wchar_t* title;
+    LRESULT (*proc)(HWND, UINT, WPARAM, LPARAM);
+    void* lp_param;
+  };
+  const ProbeCase cases[4] = {
+      // e: exact TrayController replication (name+proc+param+title)
+      {"probe.e_exact", L"RWHTrayWindow", L"RWH", &TrayController::wndProc,
+       &param},
+      // f: fresh class name, everything else same as e -> isolates name
+      {"probe.f_freshname", L"RWHTrayWindowF", L"RWH",
+       &TrayController::wndProc, &param},
+      // g: control — identical to the passing a-d pattern
+      {"probe.g_control", L"RWHTrayWindowG", L"rwh-probe", DefWindowProcW,
+       nullptr},
+      // h: fresh name + tray wndProc + nullptr param -> isolates lpParam
+      {"probe.h_nullparam", L"RWHTrayWindowH", L"RWH",
+       &TrayController::wndProc, nullptr},
+  };
+  for (const ProbeCase& c : cases) {
+    WNDCLASSEXW wc{};
+    wc.cbSize = sizeof(wc);
+    wc.lpfnWndProc = c.proc;
+    wc.hInstance = GetModuleHandleW(nullptr);
+    wc.lpszClassName = c.cls;
+    const ATOM atom = RegisterClassExW(&wc);
+    const DWORD reg_err = GetLastError();
+    std::string window = "reg_fail:" + std::to_string(reg_err);
+    if (atom) {
+      HWND h = CreateWindowExW(0, c.cls, c.title, 0, 0, 0, 0, 0,
+                               HWND_MESSAGE, nullptr,
+                               GetModuleHandleW(nullptr), c.lp_param);
+      window = h ? "ok" : "null:" + std::to_string(GetLastError());
+      if (h) DestroyWindow(h);
+    }
+    log.write(LogLevel::Info, c.label,
+              {{"window", window}, {"atom", std::to_string(atom)}});
+  }
+
   server.stop();
   drainConnectionWorkers();
   log.write(LogLevel::Info, "probe.done", {});
