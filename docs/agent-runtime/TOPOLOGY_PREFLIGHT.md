@@ -20,17 +20,28 @@ Required by plan Section 18.8. Verified on 2026-11-24; no credentials stored.
   (`/Users/nnzlgg/pc-coherence`, branch `main`).
 - [x] Mac mini authenticates to the Windows PC over the approved LAN
   channel: OpenSSH, key `~/.ssh/id_ed25519_pc`, `BatchMode=yes` success.
-- [ ] Windows runner builds a harmless test project and reports tool versions
-  — **IN PROGRESS**: no MSVC/Windows SDK present on 2026-11-24
-  (`vswhere`/`cl`/`cmake`/`ninja` absent; only Git at `C:\Programs\Git`).
-  Visual Studio Build Tools 2022 (workload `VCTools`, `--includeRecommended`,
-  quiet) install launched on the PC 2026-11-24 via scheduled task
-  `rwh_vs_install` (interactive session; owner approves the UAC prompt).
+- [x] Windows runner toolchain present (verified 2026-11-24 via SSH):
+  Visual Studio Build Tools 2026 18.8.2 (`18.8.12023.21`), MSVC
+  14.51.36231, Windows SDK 10.0.26100.0 (headers + libs under
+  `C:\Program Files (x86)\Windows Kits\10`), git 2.54.0 — installed on the
+  PC on 2026-07-29, before this project (an earlier check that reported
+  "no MSVC" was wrong: `cl`/`vswhere` are not on PATH and need the VS
+  developer environment). **CMake and Ninja are absent** and are being
+  installed as user-level binaries (no admin rights required).
+  NOTE: the scheduled task `rwh_vs_install` (VS Build Tools install) is
+  obsolete now — it was created before the existing install was found and
+  its last run exited 1 on UAC; it is being deleted.
+- [ ] Windows runner builds a harmless test project and reports tool
+  versions — **IN PROGRESS**: cmake/ninja install + dev-env compile
+  smoke test pending (toolchain itself confirmed present).
 - [ ] Specific Host commit buildable by the runner with exact-SHA
-  verification — **BLOCKED** on the install above.
-- [ ] Mac mini builds/launches/packages the macOS Client — **NOT STARTED**:
-  the `remote-windows-client/` tree does not exist yet (first scaffold task).
-- [ ] Client launch/test on Mac mini — **NOT STARTED** (same).
+  verification — **NOT STARTED** (toolchain ready; awaiting cmake/ninja).
+- [x] Mac mini builds/launches/tests the macOS Client — verified
+  2026-11-24: `swift build` exit 0; `swift run RemoteWindowsAppTests`
+  83/83 checks pass (exit 0); `tools/launch_smoke_test.sh` — app running
+  after 4 s, killed cleanly. Packaging (`.app` bundle) remains a
+  follow-up; the MVP runs as the SwiftPM executable.
+- [x] Client launch/test on Mac mini — same evidence as above.
 - [ ] MacBook smoke test — N/A (device not available; recorded, not blocking).
 - [x] Product runtime path is direct Windows PC ↔ Client process; Hermes is
   never a media relay (design rule; no relay code exists in the tree).
@@ -47,7 +58,8 @@ Required by plan Section 18.8. Verified on 2026-11-24; no credentials stored.
 
 - Single-repository layout (plan mandates two repos): owner instruction,
   ADR-0008 in root `docs/decisions/`.
-- Client build without full Xcode: SwiftPM (`swift build` / `swift test`)
-  with AppKit/SwiftUI from the CLT SDK (recorded in ADR-0009); an Xcode
-  project file remains a documented follow-up if packaging requirements
-  demand it.
+- Client build without full Xcode: SwiftPM (`swift build` /
+  `swift run RemoteWindowsAppTests`) with AppKit from the CLT SDK
+  (recorded in client `docs/decisions/ADR-0001-client-build-system-swiftpm.md`);
+  the CLT install has no XCTest framework, so suites run as a plain
+  executable with a minimal harness (portable 1:1 to XCTest).
