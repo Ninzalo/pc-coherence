@@ -1,7 +1,8 @@
 # Windows Host — STATUS
 
-Last updated: 2026-11-24 (RW-H-005: tray pairing-code display/rotation +
-pairing session state in the tray menu, H-FOUND).
+Last updated: 2026-11-24 (tray-exit root cause fixed: WM_NCCREATE
+contract — see "Tray window-creation failure (fixed)" below; degraded
+mode without a shell tray; per-line log flush).
 
 ## Implemented and verified
 
@@ -128,6 +129,73 @@ uses; the doc should be aligned.
   guarded list of other colliding SDK macros).
 - The MessageBox icon constant is `MB_ICONINFORMATION` (no underscore) in
   this SDK — `MB_ICON_INFORMATION` does not exist.
+- `WM_NCCREATE` return contract (MS "Using Window Procedures", verified
+  2026-11-24): a window procedure that returns `FALSE` (0) for
+  `WM_NCCREATE` makes `CreateWindowExW` fail with a **NULL handle and
+  `GetLastError() == 0`** (no error code — the creation was declined,
+  not rejected). The tray's `wndProc` originally did
+  `case WM_NCCREATE: SetWindowLongPtrW(...); return 0;` → the Host
+  exited ~1 s after start with no tray icon, in every session. Fixed
+  in `c4f9250`: return `DefWindowProcW`'s result. Discovered via the
+  `--probe-tray` in-process bisect (below) — 13 window-creation probe
+  cases isolated the return value as the single differentiator on this
+  toolchain (MSVC 14.51 / SDK 10.0.26100, Windows 11).
+
+## Tray window-creation failure — diagnosed and fixed (2026-11-24)
+
+Symptom: Host started, bound the server, then exited in ~1 s with no
+tray icon (`tray.failed code=2 detail="CreateWindowExW failed: 0"`), in
+both the user's interactive desktop session and non-interactive SSH
+sessions.
+
+Diagnosis (no user round-trips after the first log read):
+
+1. Instrumented `TrayController` (detailed error codes, `lastError()`,
+   `tray.failed`/`tray.exit` log events) + hidden-top-level-window
+   fallback — both window types failed with `GetLastError()==0`.
+2. Standalone probe binary (runner `probe-tray` action,
+   `tools/probe/probe-tray.cpp`): all 8 window-creation variants
+   **succeeded** in the same SSH session — including with a live
+   socket accept thread. The failure was process-specific, not
+   session-specific.
+3. In-process bisect: `rwh-host.exe --probe-tray` (diagnostic mode,
+   `AppController::runProbeTray`) walks the real GUI-init sequence
+   (logger → session handler → signaling server → console-control
+   handler) and creates probe windows at each step, then replicates
+   the exact tray window setup with 9 single-variable variants
+   (class name / wndProc / lpCreateParams / title / USERDATA reads /
+   WM_NCCREATE return value). Result: every wndProc that handled
+   `WM_NCCREATE` and `return 0;` failed (NULL + lasterror 0); every
+   wndProc returning `DefWindowProcW`'s result succeeded — including
+   with `SetWindowLongPtrW(GWLP_USERDATA)` done inside WM_NCCREATE
+   (the candidate-fix pattern that was then applied).
+
+Fix (commit `c4f9250`): `TrayController::wndProc` returns
+`DefWindowProcW`'s result for `WM_NCCREATE` (the documented
+contract). Related hardening in the same work stream:
+
+- **Degraded mode** (`d8444f8`): if `Shell_NotifyIconW(NIM_ADD)`
+  fails (no notification area — e.g. a non-interactive session has
+  none; observed error `2147500037`), the Host **keeps running and
+  serving** instead of exiting; `TrayController::iconOk()` reports
+  the state and the app layer logs `tray.icon_failed` (immediate,
+  via the icon-state callback added in `36fe61d`) / `tray.icon`.
+- **Per-line log flush** (`2243b1c`): `Logger::write` flushes the log
+  file after each line — a daemon log must not hold its last lines in
+  stdio's full buffer (observed: a live GUI process held its
+  `host.start`/tray lines for 10+ s).
+- Console-subsystem GUI mode ignores CTRL_CLOSE/Ctrl+C
+  (`SetConsoleCtrlHandler` swallow-all) — closing the console window
+  no longer stops the Host.
+
+Verification (all 2026-11-24):
+
+| Item | Evidence |
+|---|---|
+| macOS (clang) | 104/104 CTest at `36fe61d` |
+| Windows runner (MSVC) | `unit-tests` **104/104** + `selftest` `pairing=accepted` at `c4f9250` and `36fe61d` (`RWH status=tests_ok` / `selftest_ok`) |
+| GUI in non-interactive session | `rwh-host.exe --port 47999` launched over SSH: process **alive after 10 s**, `LISTENING 0.0.0.0:47999`, log shows `host.start` + `tray.icon_failed` (expected in a session without a tray) — degraded mode working |
+| GUI in the user's interactive session | **NOT RUN yet** — needs one double-click of `C:\rwh\build\rwh-host.exe` (expected: tray icon appears); the pairing-code dialog + LAN pairing are the next step (Next tasks #1) |
 
 ## Tray pairing-code UI (H-FOUND, RW-H-005)
 
@@ -200,17 +268,17 @@ Windows runner (DESKTOP-PC), 2026-11-24:
 | Task | Blocker |
 |---|---|
 | Stage 1 one-window video end-to-end | WebRTC pinned build not integrated (see DEPENDENCIES.md) |
-| Real pairing/LAN integration test with the macOS Client | Both sides implemented and unit-verified (Host RW-H-004/RW-H-005 at `2236750`; Client RW-C-001 at `640d673`). Remaining step is interactive: run `rwh-host.exe` in the logged-on Windows desktop session, read the one-time code from the tray "Show pairing code..." dialog, and enter it in the macOS Client. A manual step, not a runner step. |
+| Real pairing/LAN integration test with the macOS Client | Both sides implemented and unit-verified; the no-tray-icon bug that blocked the interactive run is **fixed** (`c4f9250`, verified via the probe bisect + non-interactive GUI run). Remaining step is interactive: run `rwh-host.exe` in the logged-on Windows desktop session, read the one-time code from the tray "Show pairing code..." dialog, and enter it in the macOS Client. A manual step, not a runner step. |
 
 ## Next tasks
 
 1. LAN end-to-end pairing test with the macOS Client — both sides are
-   implemented and unit-verified (Host RW-H-004/RW-H-005 at `2236750`;
-   Client RW-C-001 at `640d673`). Remaining step: run `rwh-host.exe`
-   in the interactive Windows desktop session, read the one-time code
-   from the tray "Show pairing code..." dialog, enter it in the macOS
-   Client, and confirm `session.pairing ... accepted=true` in the Host
-   log. Manual/interactive — not a runner step.
+   implemented and unit-verified (Host at `36fe61d`, incl. the tray
+   root-cause fix; Client RW-C-001 at `640d673`). Remaining step: run
+   `rwh-host.exe` in the interactive Windows desktop session (tray
+   icon expected), read the one-time code from the tray "Show pairing
+   code..." dialog, enter it in the macOS Client, and confirm
+   `session.pairing ... accepted=true` in the Host log. Manual/interactive — not a runner step.
 2. H-CATALOG: Start Menu scan + `LAUNCH_APP` by allow-listed `app_id`
    (IShellLinkW / ShellExecuteExW) — the next Host feature track; per
    orchestrator, H-MEDIA (capture/video) is the parallel Host track.
@@ -229,3 +297,7 @@ Done:
   (RW-H-005) — DONE 2026-11-24 at `2236750` (104/104 macOS ctest;
   Windows runner prepare/unit-tests/selftest all OK at `2236750`,
   evidence in the RW-H-005 runner table above).
+- H-FOUND: tray no-icon failure root-caused and fixed (WM_NCCREATE
+  return contract) + degraded mode + log flush — DONE 2026-11-24 at
+  `c4f9250`/`d8444f8`/`2243b1c`/`36fe61d` (evidence in the
+  "Tray window-creation failure" section above).
