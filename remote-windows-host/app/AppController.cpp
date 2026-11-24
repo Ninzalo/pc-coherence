@@ -77,6 +77,45 @@ std::string probeWindow(const wchar_t* cls) {
   if (h) DestroyWindow(h);
   return r;
 }
+
+// i: mirrors TrayController::wndProc — reads GWLP_USERDATA on EVERY
+//    message (before the switch), including WM_NCCREATE.
+LRESULT CALLBACK probeSelfOfTop(HWND h, UINT m, WPARAM w, LPARAM l) {
+  auto* self = reinterpret_cast<void*>(GetWindowLongPtrW(h, GWLP_USERDATA));
+  (void)self;
+  if (m == WM_NCCREATE) {
+    auto* cs = reinterpret_cast<CREATESTRUCTW*>(l);
+    SetWindowLongPtrW(h, GWLP_USERDATA,
+                      reinterpret_cast<LONG_PTR>(cs->lpCreateParams));
+    return 0;
+  }
+  return DefWindowProcW(h, m, w, l);
+}
+
+// j: reads GWLP_USERDATA only inside WM_NCCREATE.
+LRESULT CALLBACK probeReadInNcCreate(HWND h, UINT m, WPARAM w, LPARAM l) {
+  if (m == WM_NCCREATE) {
+    const LONG_PTR cur = GetWindowLongPtrW(h, GWLP_USERDATA);
+    (void)cur;
+    auto* cs = reinterpret_cast<CREATESTRUCTW*>(l);
+    SetWindowLongPtrW(h, GWLP_USERDATA,
+                      reinterpret_cast<LONG_PTR>(cs->lpCreateParams));
+    return 0;
+  }
+  return DefWindowProcW(h, m, w, l);
+}
+
+// k: standard pattern — SetWindowLongPtrW only, never reads USERDATA
+//    during creation.
+LRESULT CALLBACK probeStandardOnly(HWND h, UINT m, WPARAM w, LPARAM l) {
+  if (m == WM_NCCREATE) {
+    auto* cs = reinterpret_cast<CREATESTRUCTW*>(l);
+    SetWindowLongPtrW(h, GWLP_USERDATA,
+                      reinterpret_cast<LONG_PTR>(cs->lpCreateParams));
+    return 0;
+  }
+  return DefWindowProcW(h, m, w, l);
+}
 #endif
 
 }  // namespace
@@ -184,7 +223,7 @@ int AppController::runProbeTray(const Options& opts) {
     LRESULT (*proc)(HWND, UINT, WPARAM, LPARAM);
     void* lp_param;
   };
-  const ProbeCase cases[4] = {
+  const ProbeCase cases[7] = {
       // e: exact TrayController replication (name+proc+param+title)
       {"probe.e_exact", L"RWHTrayWindow", L"RWH", &TrayController::wndProc,
        &param},
@@ -197,6 +236,15 @@ int AppController::runProbeTray(const Options& opts) {
       // h: fresh name + tray wndProc + nullptr param -> isolates lpParam
       {"probe.h_nullparam", L"RWHTrayWindowH", L"RWH",
        &TrayController::wndProc, nullptr},
+      // i: USERDATA read on every message (exact TrayController shape)
+      {"probe.i_selfoftop", L"RWHTrayWindowI", L"RWH", &probeSelfOfTop,
+       nullptr},
+      // j: USERDATA read inside WM_NCCREATE only
+      {"probe.j_readinnc", L"RWHTrayWindowJ", L"RWH", &probeReadInNcCreate,
+       nullptr},
+      // k: standard pattern — set USERDATA, never read during creation
+      {"probe.k_standard", L"RWHTrayWindowK", L"RWH", &probeStandardOnly,
+       nullptr},
   };
   for (const ProbeCase& c : cases) {
     WNDCLASSEXW wc{};
