@@ -97,13 +97,13 @@ Result: **101/101 tests PASSED** (previous 83 + 18 new `session_auth`
 tests, 0 failed). The `rwh-host` target (and therefore `--selftest`)
 does not compile on macOS — Windows-only, verified via the runner below.
 
-Windows runner (DESKTOP-PC, exact SHA — see the follow-up commit for the
-verified results at this SHA):
+Windows runner (DESKTOP-PC):
 
-| Item | Evidence |
+| Item | Evidence (2026-11-24) |
 |---|---|
-| `windows-runner.sh unit-tests <sha>` | NOT RUN at the time of this commit (verification in progress; results recorded in the follow-up commit) |
-| `windows-runner.sh selftest <sha>` | NOT RUN at the time of this commit (same) |
+| Runner health | `windows-runner.sh status` → `RWH status=ok`, `RWH host=DESKTOP-PC`, `RWH cmake=cmake version 4.5.1`, `RWH ninja=1.13.2`, `RWH git=git version 2.54.0.windows.1` (exit 0) |
+| `windows-runner.sh unit-tests <sha>` | **NOT RUN** — the runner's `prepare` fetches `origin main` only, and this commit lives on the unpushed branch `agent/H-NET/RW-H004` (pushing to origin is reserved for the orchestrator per task rules); no allow-listed action fetches non-main refs. Orchestrator: after pushing, run `prepare <sha>`, `unit-tests <sha>` (expect `100% tests passed out of 101`, `RWH ctest_exit=0`, `RWH status=tests_ok`) and `selftest <sha>` (expect `RWH status=selftest_ok` with the extended pairing report) |
+| `windows-runner.sh selftest <sha>` | **NOT RUN** (same reason; the `rwh-host` target itself compiles on this tree's Windows build only via the runner — NOT RUN on macOS, never claimed) |
 
 Protocol gaps found (CONTRACT follow-up requested, see report):
 `input_event` has no result kind and `app_catalog` carries no
@@ -149,8 +149,7 @@ uses; the doc should be aligned.
    above, selftest_ok + 83/83).
 4. ~~H-NET: pairing state machine + session authorization over the
    signaling channel (RW-H-004)~~ — DONE 2026-11-24 (evidence above;
-   101/101 macOS + runner verification in this section's follow-up
-   commit).
+   101/101 macOS; runner NOT RUN — branch not pushed, see section).
 5. C-CONNECTION: macOS Client connection/pairing counterpart (pairs
    against the Host handshake verified in RW-H-004); per orchestrator,
    H-MEDIA (capture/video) is the parallel Host track.
