@@ -114,12 +114,22 @@ int TrayController::run() {
   wc.lpfnWndProc = &TrayController::wndProc;
   wc.hInstance = GetModuleHandleW(nullptr);
   wc.lpszClassName = kWindowClass;
-  if (!RegisterClassExW(&wc)) return 2;
+  if (!RegisterClassExW(&wc)) {
+    const DWORD e = GetLastError();
+    err_ = "RegisterClassExW failed: " + std::to_string(e);
+    std::fprintf(stderr, "%s\n", err_.c_str());
+    return 2;
+  }
 
   hwnd_ = CreateWindowExW(0, kWindowClass, L"RWH", 0, 0, 0, 0, 0,
                           HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr),
                           this);
-  if (!hwnd_) return 2;
+  if (!hwnd_) {
+    const DWORD e = GetLastError();
+    err_ = "CreateWindowExW failed: " + std::to_string(e);
+    std::fprintf(stderr, "%s\n", err_.c_str());
+    return 2;
+  }
 
   NOTIFYICONDATAW nid{};
   nid.cbSize = sizeof(nid);
@@ -132,12 +142,25 @@ int TrayController::run() {
   HMODULE mod = GetModuleHandleW(nullptr);
   LoadStringW(mod, IDS_TRAY_TOOLTIP, nid.szTip, ARRAYSIZE(nid.szTip));
   if (!Shell_NotifyIconW(NIM_ADD, &nid)) {
-    std::fprintf(stderr, "tray icon registration failed\n");
-    return 2;
+    const DWORD e = GetLastError();
+    err_ = "Shell_NotifyIconW(NIM_ADD) failed: " + std::to_string(e);
+    std::fprintf(stderr, "%s\n", err_.c_str());
+    return 3;
   }
 
   MSG msg{};
-  while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
+  int loop_rc = 0;  // 0 = normal WM_QUIT (menu "Exit"); 4 = GetMessage error
+  while (true) {
+    const LINT r = GetMessageW(&msg, nullptr, 0, 0);
+    if (r <= 0) {
+      if (r < 0) {
+        const DWORD e = GetLastError();
+        err_ = "GetMessageW error: " + std::to_string(e);
+        std::fprintf(stderr, "%s\n", err_.c_str());
+        loop_rc = 4;
+      }
+      break;
+    }
     TranslateMessage(&msg);
     DispatchMessageW(&msg);
   }
@@ -147,7 +170,7 @@ int TrayController::run() {
   remove.hWnd = hwnd_;
   remove.uID = kTrayId;
   Shell_NotifyIconW(NIM_DELETE, &remove);
-  return 0;
+  return loop_rc;
 }
 
 }  // namespace remotewindows::app

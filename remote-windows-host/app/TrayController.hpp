@@ -35,9 +35,14 @@ class TrayController {
                  std::function<std::string()> pairingCodeFn = {});
   ~TrayController();
 
-  // Registers the tray icon and runs the message loop. Returns when the
-  // user picks Exit from the tray menu. 0 = normal exit.
+  // Registers the tray icon and runs the message loop.
+  // Return values: 0 = normal exit via the tray menu (WM_QUIT),
+  // 2 = class/window creation failed, 3 = Shell_NotifyIconW(NIM_ADD)
+  // failed, 4 = GetMessageW error. lastError() carries the detail.
   int run();
+
+  // Diagnostic detail for the last run() failure (empty on success).
+  const std::string& lastError() const { return err_; }
 
  private:
   static LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wParam,
@@ -49,6 +54,10 @@ class TrayController {
   std::function<TrayStatus()> statusFn_;
   std::function<std::string()> pairingCodeFn_;
   HWND hwnd_ = nullptr;
+  // Diagnostic detail for the last run() failure (empty on success);
+  // read via lastError() so the app layer can log it (H-FOUND,
+  // tray-exit diagnosis 2026-11-24).
+  std::string err_;
 };
 
 }  // namespace remotewindows::app

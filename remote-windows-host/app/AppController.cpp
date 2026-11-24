@@ -95,6 +95,13 @@ int AppController::runGui(const Options& opts) {
         return handler.rotateOrCurrentCode();
       });
   int rc = tray.run();
+  if (rc != 0) {
+    log.write(LogLevel::Error, "tray.failed",
+              {{"code", std::to_string(rc)},
+               {"detail", tray.lastError().empty() ? "n/a" : tray.lastError()}});
+  } else {
+    log.write(LogLevel::Info, "tray.exit", {});
+  }
 
   server.stop();
   drainConnectionWorkers();
