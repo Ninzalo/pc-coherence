@@ -1,0 +1,15 @@
+{
+  "id": "valid_system_power_sleep",
+  "description": "Typed sleep request (paired clients only)",
+  "envelope": {
+    "schema_major": 1,
+    "schema_minor": 0,
+    "kind": "system_power_request",
+    "payload": {
+      "action": "sleep"
+    },
+    "request_id": 31,
+    "sequence": 45
+  },
+  "expected": "valid"
+}

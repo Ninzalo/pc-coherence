@@ -1,0 +1,14 @@
+{
+  "id": "valid_pairing_challenge_from_host",
+  "description": "Host challenge after HELLO (nonce + host name, no code)",
+  "envelope": {
+    "schema_major": 1,
+    "schema_minor": 0,
+    "kind": "pairing_challenge",
+    "payload": {
+      "host_name": "DESKTOP-PC",
+      "challenge_nonce": "0123456789abcdef0123456789abcdef"
+    }
+  },
+  "expected": "valid"
+}

@@ -1,0 +1,19 @@
+{
+  "id": "valid_hello_client",
+  "description": "Client HELLO",
+  "envelope": {
+    "schema_major": 1,
+    "schema_minor": 0,
+    "kind": "hello",
+    "payload": {
+      "product_name": "macos-client",
+      "app_version": "0.1.0",
+      "capabilities": [
+        "app_catalog",
+        "input",
+        "resize"
+      ]
+    }
+  },
+  "expected": "valid"
+}

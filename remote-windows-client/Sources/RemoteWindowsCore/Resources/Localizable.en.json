@@ -1,0 +1,9 @@
+{
+  "app.title": "Remote Windows Client",
+  "app.versionLabel": "Version",
+  "status.label": "Connection",
+  "status.disconnected": "Disconnected",
+  "status.connecting": "Connecting…",
+  "status.connected": "Connected",
+  "pref.host_address_label": "Windows Host"
+}

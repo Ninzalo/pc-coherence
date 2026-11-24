@@ -1,0 +1,13 @@
+{
+  "id": "valid_pairing_result_accepted",
+  "description": "Pairing accepted",
+  "envelope": {
+    "schema_major": 1,
+    "schema_minor": 0,
+    "kind": "pairing_result",
+    "payload": {
+      "accepted": true
+    }
+  },
+  "expected": "valid"
+}

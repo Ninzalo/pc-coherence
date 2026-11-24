@@ -5,6 +5,7 @@
 build/
 out/
 *.build/
+.build/
 DerivedData/
 .swiftpm/
 .cache/

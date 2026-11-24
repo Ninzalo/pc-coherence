@@ -1,0 +1,14 @@
+{
+  "id": "invalid_schema_major",
+  "description": "schema_major must be 1 for v0.x",
+  "envelope": {
+    "schema_major": 2,
+    "schema_minor": 0,
+    "kind": "heartbeat",
+    "payload": {
+      "sender_time_ms": 1700000000000
+    }
+  },
+  "expected": "invalid",
+  "violation": "schema_major_must_be_1"
+}

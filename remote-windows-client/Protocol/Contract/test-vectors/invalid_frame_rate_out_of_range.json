@@ -1,0 +1,17 @@
+{
+  "id": "invalid_frame_rate_out_of_range",
+  "description": "target_fps must be 0..240",
+  "envelope": {
+    "schema_major": 1,
+    "schema_minor": 0,
+    "kind": "frame_rate_request",
+    "payload": {
+      "window_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+      "target_fps": 500,
+      "reason": "focus_changed"
+    },
+    "request_id": 23
+  },
+  "expected": "invalid",
+  "violation": "fps_out_of_range"
+}

@@ -1,0 +1,23 @@
+{
+  "id": "valid_hello_host",
+  "description": "Host HELLO with capabilities",
+  "envelope": {
+    "schema_major": 1,
+    "schema_minor": 0,
+    "kind": "hello",
+    "payload": {
+      "product_name": "windows-host",
+      "app_version": "0.1.0",
+      "capabilities": [
+        "app_catalog",
+        "launch",
+        "multi_window",
+        "input",
+        "resize",
+        "power",
+        "auxiliary_windows"
+      ]
+    }
+  },
+  "expected": "valid"
+}

@@ -1,0 +1,20 @@
+{
+  "id": "valid_input_key_down",
+  "description": "Normalized Windows key-down: VK 67 (C) with control, sequenced",
+  "envelope": {
+    "schema_major": 1,
+    "schema_minor": 0,
+    "kind": "input_event",
+    "payload": {
+      "window_id": "3f2b8c1e-9a4d-4e6f-8b7c-1d2e3f4a5b6c",
+      "key": {
+        "windows_vk": 67,
+        "modifier_bits": 2,
+        "key_down": true,
+        "is_repeat": false
+      }
+    },
+    "sequence": 41
+  },
+  "expected": "valid"
+}

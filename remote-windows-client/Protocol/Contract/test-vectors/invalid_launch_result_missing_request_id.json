@@ -1,0 +1,15 @@
+{
+  "id": "invalid_launch_result_missing_request_id",
+  "description": "launch_result must echo a request_id",
+  "envelope": {
+    "schema_major": 1,
+    "schema_minor": 0,
+    "kind": "launch_result",
+    "payload": {
+      "app_id": "a0123456789abcdef",
+      "state": "accepted"
+    }
+  },
+  "expected": "invalid",
+  "violation": "missing_request_id"
+}
