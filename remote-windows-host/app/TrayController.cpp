@@ -41,7 +41,12 @@ LRESULT CALLBACK TrayController::wndProc(HWND hwnd, UINT msg, WPARAM wParam,
       auto* cs = reinterpret_cast<CREATESTRUCTW*>(lParam);
       SetWindowLongPtrW(hwnd, GWLP_USERDATA,
                         reinterpret_cast<LONG_PTR>(cs->lpCreateParams));
-      return 0;
+      // WM_NCCREATE contract (MS "Using Window Procedures"): the
+      // procedure must return DefWindowProcW's result — returning
+      // FALSE (0) makes CreateWindowExW fail with NULL and
+      // GetLastError()==0 (root cause of the no-tray-icon failure,
+      // diagnosed 2026-11-24 via the --probe-tray bisect).
+      return DefWindowProcW(hwnd, msg, wParam, lParam);
     }
     case kTrayCallback:
       if (self) {
