@@ -123,3 +123,5 @@ int TrayController::run() {
   Shell_NotifyIconW(NIM_DELETE, &remove);
   return 0;
 }
+
+}  // namespace remotewindows::app
