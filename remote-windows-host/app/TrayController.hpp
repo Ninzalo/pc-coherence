@@ -25,14 +25,21 @@ struct TrayStatus {
 
 class TrayController {
  public:
+  using IconStateFn = std::function<void(bool ok, const std::string& detail)>;
+
   // pairingCodeFn (optional, RW-H-005) supplies the one-time code for
   // the "Show pairing code..." menu item: the owner returns the current
   // active code, or a fresh one (PairingHost::beginEpoch) when the
   // previous code was consumed or expired. The value is displayed via
   // MessageBox ONLY — never logged or persisted (FR-13 / AGENTS rule 9).
   // When null the menu item is not shown (previous behavior).
+  // iconStateFn (optional) is called as soon as Shell_NotifyIconW
+  // (NIM_ADD) has been attempted — true on success, false with the
+  // error detail in degraded mode — so the app layer can log the icon
+  // state while the host is still running (2026-11-24).
   TrayController(std::function<TrayStatus()> statusFn,
-                 std::function<std::string()> pairingCodeFn = {});
+                 std::function<std::string()> pairingCodeFn = {},
+                 IconStateFn iconStateFn = {});
   ~TrayController();
 
   // Registers the tray icon and runs the message loop.
@@ -68,6 +75,7 @@ class TrayController {
 
   std::function<TrayStatus()> statusFn_;
   std::function<std::string()> pairingCodeFn_;
+  IconStateFn iconStateFn_;
   HWND hwnd_ = nullptr;
   // False when the tray icon could not be registered (degraded mode).
   bool iconOk_ = true;

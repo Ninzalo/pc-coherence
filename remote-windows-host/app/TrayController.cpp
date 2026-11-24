@@ -27,9 +27,11 @@ TrayController* selfOf(HWND hwnd) {
 }  // namespace
 
 TrayController::TrayController(std::function<TrayStatus()> statusFn,
-                               std::function<std::string()> pairingCodeFn)
+                               std::function<std::string()> pairingCodeFn,
+                               IconStateFn iconStateFn)
     : statusFn_(std::move(statusFn)),
-      pairingCodeFn_(std::move(pairingCodeFn)) {}
+      pairingCodeFn_(std::move(pairingCodeFn)),
+      iconStateFn_(std::move(iconStateFn)) {}
 
 TrayController::~TrayController() = default;
 
@@ -168,7 +170,7 @@ int TrayController::run() {
     // non-interactive session with no tray). The host keeps running
     // and serving — the tray is the UI, not the product core — but
     // the menu (status / pairing code / exit) is unavailable in this
-    // session. Logged by the app layer via iconOk()/lastError().
+    // session.
     const DWORD e = GetLastError();
     err_ = "Shell_NotifyIconW(NIM_ADD) failed: " + std::to_string(e)
            + " (degraded, continuing without tray icon)";
@@ -176,6 +178,7 @@ int TrayController::run() {
     icon_added = false;
     iconOk_ = false;
   }
+  if (iconStateFn_) iconStateFn_(icon_added, icon_added ? "" : err_);
 
   MSG msg{};
   int loop_rc = 0;  // 0 = normal WM_QUIT (menu "Exit"); 4 = GetMessage error

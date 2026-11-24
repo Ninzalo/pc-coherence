@@ -205,6 +205,17 @@ int AppController::runGui(const Options& opts) {
         // FR-13 UI channel: shown via MessageBox by the tray; the code
         // is never logged or persisted (AGENTS rule 9).
         return handler.rotateOrCurrentCode();
+      },
+      [&log](bool ok, const std::string& detail) {
+        if (ok) {
+          log.write(LogLevel::Info, "tray.icon", {});
+        } else {
+          // Degraded mode: no notification area in this session (e.g.
+          // a non-interactive session). The host serves without the
+          // tray icon; logged immediately so live diagnosis works.
+          log.write(LogLevel::Error, "tray.icon_failed",
+                    {{"detail", detail}});
+        }
       });
 #ifdef _WIN32
   // Console-subsystem build: a console window exists in GUI mode.
