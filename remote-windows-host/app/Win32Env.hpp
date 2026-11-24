@@ -55,6 +55,9 @@
 #ifdef MIDDLE
 #undef MIDDLE
 #endif
+#ifdef DOUBLE_CLICK
+#undef DOUBLE_CLICK
+#endif
 #ifdef MOVE
 #undef MOVE
 #endif
