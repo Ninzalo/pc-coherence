@@ -14,5 +14,13 @@ enum L10nSuite {
         .case("unknownKeyFallsBackToKey") {
             harness.expectEqual(L10n.t("no.such.key"), "no.such.key")
         },
+        .case("connectionStringsResolve") {
+            harness.expectEqual(L10n.t("status.pairing"),
+                                "Pairing — enter the 6-digit code shown on the Windows Host")
+            harness.expectEqual(L10n.t("status.paired"), "Paired")
+            harness.expectEqual(L10n.t("status.locked"), "Locked")
+            harness.expectEqual(L10n.t("connect.button"), "Connect")
+            harness.expectEqual(L10n.t("catalog.empty"), "No applications available yet")
+        },
     ]
 }

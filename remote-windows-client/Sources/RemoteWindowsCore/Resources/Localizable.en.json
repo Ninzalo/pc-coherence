@@ -5,5 +5,20 @@
   "status.disconnected": "Disconnected",
   "status.connecting": "Connecting…",
   "status.connected": "Connected",
-  "pref.host_address_label": "Windows Host"
+  "status.pairing": "Pairing — enter the 6-digit code shown on the Windows Host",
+  "status.paired": "Paired",
+  "status.rejected": "Rejected",
+  "status.locked": "Locked",
+  "status.invalidAddress": "Enter a valid host address (host or host:port)",
+  "pref.host_address_label": "Windows Host",
+  "connect.button": "Connect",
+  "disconnect.button": "Disconnect",
+  "pairingCode.label": "Pairing code",
+  "pairingCode.submit": "Enter code",
+  "pairingCode.placeholder": "123456",
+  "pairingCode.invalid": "The pairing code must be exactly 6 digits",
+  "host.placeholder": "host or host:port",
+  "host.name": "Host",
+  "catalog.empty": "No applications available yet",
+  "catalog.available": "applications available"
 }
