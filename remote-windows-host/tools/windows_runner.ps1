@@ -143,7 +143,7 @@ switch ($Action) {
     Copy-Item "$proj\tools\probe\probe-tray.cpp" "$probe\probe-tray.cpp" -Force
     $rc = run-native cl @('/nologo','/EHsc','/O2','/std:c++17',
                           "/Fe:$probe\probe-tray.exe", "/Fo:$probe\",
-                          "$probe\probe-tray.cpp")
+                          "$probe\probe-tray.cpp", 'user32.lib')
     if ($rc -ne 0) { die 'probe_build_failed' }
     $rc = run-native "$probe\probe-tray.exe" @()
     emit 'probe_exit' $rc
