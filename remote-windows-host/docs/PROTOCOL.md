@@ -11,9 +11,11 @@ Version: `protocol/VERSION` = **0.1.0**.
   ignored). See ADR-0002 for the rationale (JSON wire in v0.x while the
   .proto remains the canonical schema).
 - One logical session per TCP connection (see §7).
-- Transport for v0.1.0: direct TCP on the LAN (signaling + control). Video
-  will travel on WebRTC media tracks once the pinned WebRTC build is
-  integrated; **no video is transmitted in v0.1.0** (see STATUS.md).
+- Transport for v0.1.0: direct TCP on the LAN. Control and signaling use the
+  control channel (TCP 47987); video uses the dedicated media channel
+  (H.264 over TCP 47988) specified in §9 (ADR-0008). **No video is
+  transmitted in v0.1.0** until the media channel is implemented (see
+  ADR-0008, STATUS.md).
 
 ## 2. Version negotiation
 
@@ -158,9 +160,125 @@ power control.
 `window_not_found`, `window_busy`, `resize_rejected`, `power_privilege`,
 `power_not_allowed`, `rate_limited`, `protocol_mismatch`, `malformed_frame`,
 `sequence_gap`, `rate_limited_power_retry` (never sent; retry is
-forbidden — see §9).
+forbidden — see §10).
 
-## 9. Safety rules
+## 9. Media channel (H.264, dedicated TCP 47988)
+
+Normative spec for the ADR-0008 MVP media transport. This section does not
+change the v0.1.0 control schema (`protocol/VERSION` stays 0.1.0; the media
+channel adds no envelope kinds). All control and signaling stays on the paired
+control channel (TCP 47987); this channel carries video only.
+
+### 9.1 Scope
+
+- The media channel carries **video only** (H.264 NAL byte payloads). All
+  control and signaling — every kind in §3 — stays on the paired control
+  channel (TCP 47987).
+- Video never passes through signaling (ADR-0001 constraint, kept).
+- The channel is a byte stream of fixed-format packets (§9.4); it carries no
+  JSON envelopes and no control semantics.
+
+### 9.2 Port and handshake
+
+- The Host listens on **TCP 47988**.
+- A media connection is accepted **only** from a peer that completed pairing
+  (shares a session key) over 47987. Unpaired peers are refused.
+- Handshake (Client = initiator, Host = responder):
+  1. Client connects to 47988.
+  2. Host sends 16 random bytes (`host_nonce`, from a CSPRNG).
+  3. Client replies with 32 bytes =
+     `HMAC-SHA256(session_key_bytes, "rwh-media-v1|" || host_nonce)`, where
+     `session_key_bytes` are the 32 raw bytes of the paired session key (§9.3)
+     and `||` is byte concatenation.
+  4. The Host computes the same HMAC for each currently-paired session key and
+     compares. On any match it sends `0x01` (accept); otherwise it sends `0x00`
+     and closes the connection.
+- The handshake proves knowledge of a valid session key without transmitting
+  it. On `0x00`, a timeout, or any malformed handshake step, the Host closes
+  the connection.
+
+### 9.3 Key derivation
+
+Exact byte formats (lowercase-hex SHA-256, as in `core/sha256.cpp`; little-
+endian where binary). A golden vector MUST reproduce these values exactly
+(`protocol/test-vectors/media/key-derivation.json`).
+
+- `session_key` = `hex(sha256("rwh-pairing-v1|" + code + "|" + host_name))` —
+  32-byte digest (64 lowercase-hex chars). This is exactly
+  `core::PairingManager::deriveSessionKey` (`core/pairing.cpp`); both peers
+  derive it from the one-time `code` + `host_name` at pairing time.
+- `media_key(window_id)` =
+  `hex(sha256("rwh-media-v1|" + session_key_hex + "|" + window_id))` — 32
+  bytes; the AES-256 key for that window's stream.
+- `nonce_prefix(window_id)` = the first 8 bytes of
+  `sha256("rwh-media-nonce-v1|" + session_key_hex + "|" + window_id)`.
+
+`session_key_hex` is the 64 lowercase-hex string form of `session_key`;
+`window_id` is the `window_announce` UUID string (not the `stream_id`). Each
+`window_id` gets its own `media_key` and `nonce_prefix` (per-stream key
+separation).
+
+### 9.4 Packet framing (little-endian, per packet)
+
+Byte layout of one packet; all integers little-endian:
+
+| field | type | value |
+|---|---|---|
+| `magic` | u8 | `0x52` ('R') |
+| `version` | u8 | `1` |
+| `stream_id` | u16 | first 2 bytes of `sha256(window_id)` (UTF-8 UUID string), read little-endian |
+| `flags` | u8 | bit0 = keyframe |
+| `frame_seq` | u32 | per stream, starts at 0, wraps mod 2^32 |
+| `payload_len` | u32 | ciphertext length = plaintext length + 16 (tag) |
+| `ciphertext` | `payload_len` bytes | AES-256-GCM ciphertext of the H.264 byte payload, 16-byte GCM tag appended |
+
+- `payload_len` is in bytes and equals plaintext length + 16.
+- The AES-256-GCM **key** is `media_key(window_id)` (§9.3).
+- The AES-256-GCM **nonce** (12 bytes) = `nonce_prefix(window_id)` (8 bytes)
+  `||` `packet_counter` (u32 little-endian, per stream, starts at 0).
+- AAD is empty.
+- `payload_len` MUST be ≤ 16 MiB. A `payload_len` greater than 16 MiB, a
+  malformed `magic`, or a wrong `version` is malformed (§9.6).
+- The vectors in `protocol/test-vectors/media/aes-256-gcm.json` MUST be
+  reproduced exactly by every AES-256-GCM backend (Windows CNG `BCrypt*`,
+  macOS CryptoKit `AES.GCM`).
+
+### 9.5 Stream lifecycle
+
+- A media stream follows `window_announce` / `window_remove` on the control
+  channel (47987).
+- On `window_announce`: the Host starts the stream; its **first** packet on
+  that stream MUST be a keyframe (`flags` bit0 set).
+- On `window_remove`: the Host stops the stream; the Client discards it.
+- After **any** media-channel reconnect, the Host re-sends a keyframe for each
+  active stream.
+- FPS gating is done Host-side **before** encoding (FR-09); the
+  `stream_status` kind stays on 47987, not on the media channel.
+
+### 9.6 Robustness
+
+- A malformed `magic`, a wrong `version`, or `payload_len` > 16 MiB: the
+  receiving side closes the media connection.
+- The Client reconnects and re-handshakes (§9.2) after a close.
+- There is **no** retransmission logic: TCP is reliable and in-order (LAN loss
+  is negligible at the measured link rates).
+- Malformed input must never crash the process (plan FR-13); malformed packets
+  are dropped and the connection is reset.
+
+### 9.7 Security
+
+- No pairing → no session key → the §9.2 handshake cannot succeed; no media is
+  possible on an unpaired connection.
+- Per-window key separation: each `window_id` has its own `media_key`.
+- AES-256-GCM provides authenticated encryption (confidentiality + integrity);
+  a bad GCM tag means the packet is discarded.
+- The media channel carries no control semantics.
+- Frame contents and all derived keys are never logged.
+- FR-13 deviation (recorded in ADR-0008 and `docs/STATUS.md`): media is
+  protected with per-stream AES-256-GCM derived from the pairing session key,
+  not DTLS-SRTP.
+
+## 10. Safety rules
 
 - `system_power_request` is never auto-retried after a timeout; the result
   is reported as unknown. Shutdown never force-closes applications by
