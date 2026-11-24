@@ -44,6 +44,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <vector>
 
 #include "media/aead_cng.hpp"
@@ -52,6 +53,14 @@
 namespace remotewindows::media {
 
 namespace {
+
+// TEMP DIAGNOSTIC (runner failure triage) — removed after triage.
+void diag(const char* what, NTSTATUS st) {
+  FILE* f = std::fopen("C:\\rwh\\aead_diag.txt", "a");
+  if (f == nullptr) return;
+  std::fprintf(f, "%s=%08lX\n", what, static_cast<unsigned long>(st));
+  std::fclose(f);
+}
 
 // BCryptSetProperty takes the property value as PUCHAR even when the
 // property is a wide string: reinterpret the L"..." literal bytes,
@@ -64,11 +73,14 @@ inline PUCHAR propertyBytes(const wchar_t* w) {
 // Returns NULL on failure; caller closes the handle.
 BCRYPT_ALG_HANDLE openAesGcmAlgorithm() {
   BCRYPT_ALG_HANDLE alg = nullptr;
-  if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_AES_ALGORITHM, nullptr, 0) != 0)
+  if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_AES_ALGORITHM, nullptr, 0) != 0) {
+    diag("OpenProvider_fail", 0xFFFFFFFF);
     return nullptr;
+  }
   const NTSTATUS st = BCryptSetProperty(
       alg, BCRYPT_CHAINING_MODE, propertyBytes(BCRYPT_CHAIN_MODE_GCM),
       static_cast<ULONG>(sizeof(BCRYPT_CHAIN_MODE_GCM)), 0);
+  diag("SetProperty_GCM", st);
   if (st != 0) {
     BCryptCloseAlgorithmProvider(alg, 0);
     return nullptr;
@@ -83,6 +95,7 @@ BCRYPT_KEY_HANDLE loadKey(BCRYPT_ALG_HANDLE alg, const uint8_t key[32]) {
   const NTSTATUS st = BCryptGenerateSymmetricKey(
       alg, &hkey, nullptr, 0,
       reinterpret_cast<PUCHAR>(const_cast<uint8_t*>(key)), 32, 0);
+  diag("GenerateSymmetricKey", st);
   if (st != 0) {
     return nullptr;
   }
@@ -113,6 +126,7 @@ bool AeadCng::seal(const uint8_t key[32], const uint8_t nonce[12],
         static_cast<ULONG>(kMediaNonceBytes),
         reinterpret_cast<PUCHAR>(out_ct_tag),
         static_cast<ULONG>(out_capacity), &cb_result, 0);
+    diag("Encrypt", st);
     BCryptDestroyKey(hkey);
     if (st == 0 && cb_result == static_cast<ULONG>(out_capacity)) {
       out_len = cb_result;
@@ -148,6 +162,7 @@ bool AeadCng::open(const uint8_t key[32], const uint8_t nonce[12],
         static_cast<ULONG>(kMediaNonceBytes),
         reinterpret_cast<PUCHAR>(scratch.data()),
         static_cast<ULONG>(pt_len), &cb_result, 0);
+    diag("Decrypt", st);
     BCryptDestroyKey(hkey);
     if (st == 0 && cb_result == static_cast<ULONG>(pt_len)) {
       for (size_t i = 0; i < pt_len; ++i) out_pt[i] = scratch[i];
