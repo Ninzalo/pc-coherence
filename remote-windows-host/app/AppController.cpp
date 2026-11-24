@@ -253,7 +253,7 @@ int AppController::runProbeTray(const Options& opts) {
     LRESULT (*proc)(HWND, UINT, WPARAM, LPARAM);
     void* lp_param;
   };
-  const ProbeCase cases[7] = {
+  const ProbeCase cases[11] = {
       // e: exact TrayController replication (name+proc+param+title)
       {"probe.e_exact", L"RWHTrayWindow", L"RWH", &TrayController::wndProc,
        &param},
