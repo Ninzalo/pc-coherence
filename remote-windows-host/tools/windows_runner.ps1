@@ -2,7 +2,7 @@
 # Allow-listed actions only; exact-SHA builds; machine-readable report lines
 # "RWH key=value". No arbitrary command execution.
 param(
-  [Parameter(Mandatory)][ValidateSet('status','prepare','build','unit-tests','clean')][string]$Action,
+  [Parameter(Mandatory)][ValidateSet('status','prepare','build','unit-tests','selftest','clean')][string]$Action,
   [string]$Sha
 )
 $ErrorActionPreference = 'Stop'
@@ -52,7 +52,7 @@ function load-vs-env {
 }
 
 if ($Sha -ne '' -and $Sha -notmatch '^[0-9a-f]{40}$') { die 'sha_rejected' }
-if (($Action -eq 'build' -or $Action -eq 'unit-tests') -and -not (Test-Path $proj)) { die 'not_prepared' }
+if (($Action -eq 'build' -or $Action -eq 'unit-tests' -or $Action -eq 'selftest') -and -not (Test-Path $proj)) { die 'not_prepared' }
 
 switch ($Action) {
   'status' {
@@ -100,11 +100,34 @@ switch ($Action) {
     $actual = git -C $src rev-parse HEAD
     emit 'sha' $actual
     load-vs-env
+    # Configure (idempotent) then build: the build dir may not exist yet.
+    $rc = run-native $CMake @('-S', $proj, '-B', $build, '-G', 'Ninja',
+                              '-DCMAKE_BUILD_TYPE=RelWithDebInfo',
+                              '-DCMAKE_MAKE_PROGRAM=C:/Programs/ninja/ninja.exe')
+    if ($rc -ne 0) { die 'configure_failed' }
     $rc = run-native $CMake @('--build', $build, '-j')
     if ($rc -ne 0) { die 'build_failed' }
     $rc = run-native $Ctest @('--test-dir', $build, '--output-on-failure')
     emit 'ctest_exit' $rc
     if ($rc -eq 0) { emit 'status' 'tests_ok'; exit 0 }
     else { emit 'status' 'tests_failed'; exit $rc }
+  }
+  'selftest' {
+    # Headless smoke test of the app shell: real signaling server on
+    # 127.0.0.1 + in-process HELLO/pairing-challenge exchange. Fixed
+    # executable, fixed arguments — no arbitrary command path.
+    $actual = git -C $src rev-parse HEAD
+    emit 'sha' $actual
+    load-vs-env
+    $rc = run-native $CMake @('-S', $proj, '-B', $build, '-G', 'Ninja',
+                              '-DCMAKE_BUILD_TYPE=RelWithDebInfo',
+                              '-DCMAKE_MAKE_PROGRAM=C:/Programs/ninja/ninja.exe')
+    if ($rc -ne 0) { die 'configure_failed' }
+    $rc = run-native $CMake @('--build', $build, '-j')
+    if ($rc -ne 0) { die 'build_failed' }
+    $rc = run-native (Join-Path $build 'rwh-host.exe') @('--selftest')
+    emit 'selftest_exit' $rc
+    if ($rc -eq 0) { emit 'status' 'selftest_ok'; exit 0 }
+    else { emit 'status' 'selftest_failed'; exit $rc }
   }
 }

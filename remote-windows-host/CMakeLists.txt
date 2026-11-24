@@ -46,9 +46,22 @@ add_executable(rwh-signaling-probe app/signaling_probe.cpp)
 target_link_libraries(rwh-signaling-probe PRIVATE rwh_network)
 
 # --- Windows-only targets --------------------------------------------------
-# win32/ adapters (capture, windows, input, power, catalog) and the tray
-# app shell compile only with MSVC + Windows SDK. They are intentionally
-# absent from the portable build; see docs/STATUS.md (NOT RUN on macOS).
+# Win32 adapters (capture, windows, input, power, catalog) compile only with
+# MSVC + Windows SDK. They are intentionally absent from the portable build;
+# see docs/STATUS.md (NOT RUN on macOS).
+
+# Windows Host application shell (H-FOUND, plan section 4.1). Console
+# subsystem (selftest output must be capturable by the build/test runner);
+# Win32 + .rc resources, MSVC only.
+if(WIN32)
+  add_executable(rwh-host
+    app/main.cpp
+    app/AppController.cpp
+    app/TrayController.cpp
+    app/Logger.cpp
+    app/resources/en-US.rc)
+  target_link_libraries(rwh-host PRIVATE rwh_network shell32 user32)
+endif()
 
 enable_testing()
 add_subdirectory(tests)

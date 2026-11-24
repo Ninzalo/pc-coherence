@@ -1,0 +1,13 @@
+#include "resource.h"
+
+LANGUAGES
+  0x09, 0x04  // English (United States) — MVP ships English only (FR-14)
+
+STRINGTABLE
+BEGIN
+  IDS_APP_TITLE     "Remote Windows Host"
+  IDS_TRAY_TOOLTIP  "Remote Windows Host (signaling server)"
+  IDS_STATUS_FORMAT "Windows Host running on port %1 (connections: %2)"
+  IDS_MENU_STATUS   "Status..."
+  IDS_MENU_EXIT     "Exit"
+END
