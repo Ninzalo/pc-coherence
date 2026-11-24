@@ -58,6 +58,27 @@ void drainConnectionWorkers() {
   std::this_thread::sleep_for(std::chrono::milliseconds(150));
 }
 
+#ifdef _WIN32
+// One-shot window-creation probe for the runProbeTray bisect: register
+// a fresh class (DefWindowProc), create a message-only window, report
+// "ok" or "null:<lasterror>", destroy the window.
+std::string probeWindow(const wchar_t* cls) {
+  WNDCLASSEXW wc{};
+  wc.cbSize = sizeof(wc);
+  wc.lpfnWndProc = DefWindowProcW;
+  wc.hInstance = GetModuleHandleW(nullptr);
+  wc.lpszClassName = cls;
+  if (!RegisterClassExW(&wc))
+    return "reg_fail:" + std::to_string(GetLastError());
+  HWND h = CreateWindowExW(0, cls, L"rwh-probe", 0, 0, 0, 0, 0,
+                           HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr),
+                           nullptr);
+  const std::string r = h ? "ok" : "null:" + std::to_string(GetLastError());
+  if (h) DestroyWindow(h);
+  return r;
+}
+#endif
+
 }  // namespace
 
 namespace remotewindows::app {
@@ -117,6 +138,45 @@ int AppController::runGui(const Options& opts) {
   log.write(LogLevel::Info, "host.stop",
             {{"envelopes", std::to_string(server.envelopesReceived())}});
   return rc;
+}
+
+int AppController::runProbeTray(const Options& opts) {
+#ifdef _WIN32
+  Logger& log = Logger::instance();
+  std::string err;
+  if (!log.init(Logger::defaultPath(err))) {
+    std::fprintf(stderr, "warning: log file not opened: %s\n", err.c_str());
+  }
+
+  // a: right after logger init — before any networking object exists.
+  log.write(LogLevel::Info, "probe.a_logger_only",
+            {{"window", probeWindow(L"RWHProbeA")}});
+
+  SignalingSessionHandler handler(hostName(), &log);
+  log.write(LogLevel::Info, "probe.b_handler",
+            {{"window", probeWindow(L"RWHProbeB")}});
+
+  net::SignalingServer server(&handler);
+  if (!server.start("0.0.0.0", opts.port, err)) {
+    log.write(LogLevel::Error, "probe.start_failed",
+              {{"port", std::to_string(opts.port)}, {"error", err}});
+    return 2;
+  }
+  log.write(LogLevel::Info, "probe.c_server",
+            {{"window", probeWindow(L"RWHProbeC")}});
+
+  ::SetConsoleCtrlHandler([](DWORD) { return TRUE; }, TRUE);
+  log.write(LogLevel::Info, "probe.d_ctrl_handler",
+            {{"window", probeWindow(L"RWHProbeD")}});
+
+  server.stop();
+  drainConnectionWorkers();
+  log.write(LogLevel::Info, "probe.done", {});
+  return 0;
+#else
+  std::fprintf(stderr, "probe-tray is Windows-only\n");
+  return 2;
+#endif
 }
 
 int AppController::runSelftest(const Options& opts) {

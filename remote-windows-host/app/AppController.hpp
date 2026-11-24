@@ -25,6 +25,8 @@ struct Options {
   std::string addr;
   uint16_t port = 47987;  // product signaling port (plan section 18.6)
   bool selftest = false;
+  // Diagnostic: window-creation bisect (see runProbeTray).
+  bool probe_tray = false;
 };
 
 struct SelftestResult {
@@ -50,6 +52,14 @@ class AppController {
   // -> APP_CATALOG(empty)), prints a machine-readable JSON report to
   // stdout. Returns 0 on pass.
   int runSelftest(const Options& opts);
+  // Diagnostic (tray-exit investigation 2026-11-24): walk the real
+  // GUI-init sequence (logger, session handler, signaling server,
+  // console-control handler) and at each step register a fresh window
+  // class + create a message-only window, logging ok / null:<err> to the
+  // host log. Identifies which init step breaks in-process window
+  // creation (a standalone probe process succeeds; TrayController::run
+  // fails with GetLastError()==0). Windows-only.
+  int runProbeTray(const Options& opts);
 };
 
 }  // namespace remotewindows::app

@@ -33,12 +33,15 @@ int main(int argc, char** argv) {
       opts.addr = argv[++i];
     } else if (a == "--selftest") {
       opts.selftest = true;
+    } else if (a == "--probe-tray") {
+      opts.probe_tray = true;
     } else {
       printUsage();
       return 2;
     }
   }
   remotewindows::app::AppController controller;
-  return opts.selftest ? controller.runSelftest(opts)
-                       : controller.runGui(opts);
+  return opts.selftest      ? controller.runSelftest(opts)
+         : opts.probe_tray  ? controller.runProbeTray(opts)
+                            : controller.runGui(opts);
 }
