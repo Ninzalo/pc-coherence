@@ -66,7 +66,7 @@ class AppSignalingHandler : public net::SignalingServer::Handler {
 };
 
 // Machine-readable selftest report (consumed by the build/test runner).
-void printSelftest(const SelftestResult& res) {
+void printSelftest(const remotewindows::app::SelftestResult& res) {
   std::printf("{\"selftest\":true,\"passed\":%s,\"stage\":\"%s\","
               "\"port\":%u,\"reply_kind\":\"%s\",\"envelopes\":%zu,"
               "\"error\":\"%s\"}\n",
@@ -76,6 +76,8 @@ void printSelftest(const SelftestResult& res) {
 }
 
 }  // namespace
+
+namespace remotewindows::app {
 
 int AppController::runGui(const Options& opts) {
   Logger& log = Logger::instance();
@@ -181,3 +183,5 @@ int AppController::runSelftest(const Options& opts) {
   printSelftest(res);
   return res.passed ? 0 : 1;
 }
+
+}  // namespace remotewindows::app
