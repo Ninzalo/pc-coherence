@@ -57,6 +57,7 @@ if(WIN32)
   add_executable(rwh-host
     app/main.cpp
     app/AppController.cpp
+    app/SessionAuth.cpp
     app/TrayController.cpp
     app/Logger.cpp
     app/resources/en-US.rc)
