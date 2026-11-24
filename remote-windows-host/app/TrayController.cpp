@@ -151,7 +151,7 @@ int TrayController::run() {
   MSG msg{};
   int loop_rc = 0;  // 0 = normal WM_QUIT (menu "Exit"); 4 = GetMessage error
   while (true) {
-    const LINT r = GetMessageW(&msg, nullptr, 0, 0);
+    const LRESULT r = GetMessageW(&msg, nullptr, 0, 0);
     if (r <= 0) {
       if (r < 0) {
         const DWORD e = GetLastError();
