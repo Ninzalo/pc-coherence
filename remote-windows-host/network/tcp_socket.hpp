@@ -31,7 +31,9 @@ class TcpSocket {
   bool connectTo(const std::string& host, uint16_t port, std::string& err);
 
   bool sendAll(const uint8_t* data, size_t len, std::string& err);
-  ssize_t recvSome(uint8_t* data, size_t len, std::string& err);
+  // Portable return type: std::int64_t (POSIX ssize_t is unavailable to
+  // MSVC in C++ mode; Windows recv/send return int and convert cleanly).
+  std::int64_t recvSome(uint8_t* data, size_t len, std::string& err);
   bool setRecvTimeoutMs(int ms, std::string& err);
   bool close();
   bool isOpen() const;

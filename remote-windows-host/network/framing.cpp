@@ -18,7 +18,7 @@ std::vector<uint8_t> encodeFrame(const std::string& json) {
 bool recvExact(TcpSocket& s, uint8_t* out, size_t n, std::string& err) {
   size_t got = 0;
   while (got < n) {
-    ssize_t r = s.recvSome(out + got, n - got, err);
+    std::int64_t r = s.recvSome(out + got, n - got, err);
     if (r < 0) {
       if (got == 0) return false;
       err = "connection lost mid-frame";

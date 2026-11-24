@@ -160,8 +160,8 @@ bool TcpSocket::connectTo(const std::string& host, uint16_t port,
 bool TcpSocket::sendAll(const uint8_t* data, size_t len, std::string& err) {
   size_t sent = 0;
   while (sent < len) {
-    ssize_t n = ::send(fd_, reinterpret_cast<const char*>(data + sent),
-                       len - sent, 0);
+    std::int64_t n = ::send(fd_, reinterpret_cast<const char*>(data + sent),
+                             len - sent, 0);
     if (n <= 0) {
       err = std::string("send: ") + errnoStr();
       return false;
@@ -171,8 +171,8 @@ bool TcpSocket::sendAll(const uint8_t* data, size_t len, std::string& err) {
   return true;
 }
 
-ssize_t TcpSocket::recvSome(uint8_t* data, size_t len, std::string& err) {
-  ssize_t n = ::recv(fd_, reinterpret_cast<char*>(data), len, 0);
+std::int64_t TcpSocket::recvSome(uint8_t* data, size_t len, std::string& err) {
+  std::int64_t n = ::recv(fd_, reinterpret_cast<char*>(data), len, 0);
   if (n < 0) err = std::string("recv: ") + errnoStr();
   return n;
 }
