@@ -1,8 +1,7 @@
 # Windows Host — STATUS
 
-Last updated: 2026-11-24 (tray-exit root cause fixed: WM_NCCREATE
-contract — see "Tray window-creation failure (fixed)" below; degraded
-mode without a shell tray; per-line log flush).
+Last updated: 2026-11-24 (LAN end-to-end pairing with the macOS Client
+VERIFIED — see "LAN end-to-end pairing (verified)" below).
 
 ## Implemented and verified
 
@@ -195,7 +194,24 @@ Verification (all 2026-11-24):
 | macOS (clang) | 104/104 CTest at `36fe61d` |
 | Windows runner (MSVC) | `unit-tests` **104/104** + `selftest` `pairing=accepted` at `c4f9250` and `36fe61d` (`RWH status=tests_ok` / `selftest_ok`) |
 | GUI in non-interactive session | `rwh-host.exe --port 47999` launched over SSH: process **alive after 10 s**, `LISTENING 0.0.0.0:47999`, log shows `host.start` + `tray.icon_failed` (expected in a session without a tray) — degraded mode working |
-| GUI in the user's interactive session | **NOT RUN yet** — needs one double-click of `C:\rwh\build\rwh-host.exe` (expected: tray icon appears); the pairing-code dialog + LAN pairing are the next step (Next tasks #1) |
+| GUI in the user's interactive session | **VERIFIED** 2026-11-24: user double-clicked the binary; log shows `tray.icon` (success) and the pairing handshake (below) |
+
+## LAN end-to-end pairing (verified) — 2026-11-24
+
+macOS Client (192.168.100.156) ↔ Windows Host (192.168.100.139:47987),
+the first real LAN pairing of the project:
+
+| Item | Evidence (Host log, 2026-11-24) |
+|---|---|
+| Tray icon in the interactive session | `13:47:08Z event="host.start" addr="0.0.0.0" port="47987"` + `event="tray.icon"` |
+| HELLO from the Client | `13:47:26Z event="session.hello" peer="192.168.100.156:50205" kind="hello" state="pairing"` |
+| Pairing accepted (one-time code from the tray dialog, FR-13) | `13:47:38Z event="session.pairing" peer="192.168.100.156:50205" kind="pairing_challenge" state="paired" accepted="true"` |
+| Catalog request after pairing | `13:47:38Z event="session.message" kind="app_catalog_request" state="paired"` → answered with an empty catalog (catalog scanner not implemented yet — honest empty, no fake entries) |
+| Liveness | `session.message kind="heartbeat" state="paired"` every 5 s, continuous 4+ minutes |
+| Client-side confirmation (user-confirmed UI state) | `Connection: Paired`, `Host: DESKTOP-PC`, `No applications available yet` |
+
+A first pairing run earlier the same day also succeeded
+(`13:41:57Z session.pairing ... accepted="true"`).
 
 ## Tray pairing-code UI (H-FOUND, RW-H-005)
 
@@ -268,19 +284,13 @@ Windows runner (DESKTOP-PC), 2026-11-24:
 | Task | Blocker |
 |---|---|
 | Stage 1 one-window video end-to-end | WebRTC pinned build not integrated (see DEPENDENCIES.md) |
-| Real pairing/LAN integration test with the macOS Client | Both sides implemented and unit-verified; the no-tray-icon bug that blocked the interactive run is **fixed** (`c4f9250`, verified via the probe bisect + non-interactive GUI run). Remaining step is interactive: run `rwh-host.exe` in the logged-on Windows desktop session, read the one-time code from the tray "Show pairing code..." dialog, and enter it in the macOS Client. A manual step, not a runner step. |
 
 ## Next tasks
 
-1. LAN end-to-end pairing test with the macOS Client — both sides are
-   implemented and unit-verified (Host at `36fe61d`, incl. the tray
-   root-cause fix; Client RW-C-001 at `640d673`). Remaining step: run
-   `rwh-host.exe` in the interactive Windows desktop session (tray
-   icon expected), read the one-time code from the tray "Show pairing
-   code..." dialog, enter it in the macOS Client, and confirm
-   `session.pairing ... accepted=true` in the Host log. Manual/interactive — not a runner step.
-2. H-CATALOG: Start Menu scan + `LAUNCH_APP` by allow-listed `app_id`
-   (IShellLinkW / ShellExecuteExW) — the next Host feature track; per
+1. H-CATALOG: Start Menu scan + `LAUNCH_APP` by allow-listed `app_id`
+   (IShellLinkW / ShellExecuteExW) — the next Host feature track; the
+   Client already sends `app_catalog_request` on pairing and renders
+   "No applications available yet" while the catalog is empty. Per
    orchestrator, H-MEDIA (capture/video) is the parallel Host track.
 
 Done:
@@ -301,3 +311,6 @@ Done:
   return contract) + degraded mode + log flush — DONE 2026-11-24 at
   `c4f9250`/`d8444f8`/`2243b1c`/`36fe61d` (evidence in the
   "Tray window-creation failure" section above).
+- H-NET / C-CONNECTION: LAN end-to-end pairing with the macOS Client —
+  DONE 2026-11-24 (evidence in the "LAN end-to-end pairing (verified)"
+  section above; Client `docs/STATUS.md` mirrors it).

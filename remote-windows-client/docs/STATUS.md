@@ -1,6 +1,7 @@
 # macOS Client — STATUS
 
-Last updated: 2026-11-24 (C-CONNECTION complete: signaling client + pairing flow green).
+Last updated: 2026-11-24 (LAN end-to-end pairing with the Windows Host
+VERIFIED — see "LAN end-to-end pairing" below).
 
 ## Implemented and verified
 
@@ -50,9 +51,6 @@ Launch smoke: process running after 4 s, terminated cleanly.
 
 ## NOT implemented yet (honest list — no fake functionality)
 
-- LAN integration test against the running Windows Host (next task —
-  Client side is ready; the handshake is verified against the Host's
-  `app/SessionAuth.cpp` behavior, Host commit 870aec1, per the orchestrator).
 - Catalog UI with real entries + launch lifecycle (C-CATALOG). The current
   UI shows the honest empty-catalog state; the host catalog scanner is a
   later Host task. `app_catalog_changed` handling (re-request) lands with C-CATALOG.
@@ -65,19 +63,36 @@ Launch smoke: process running after 4 s, terminated cleanly.
   RW-C-001 deliberately persists nothing).
 - `.app` bundle packaging (MVP runs as a SwiftPM executable).
 
+## LAN end-to-end pairing — verified (2026-11-24)
+
+Real LAN run, macOS Client (192.168.100.156, this machine) ↔ Windows
+Host (DESKTOP-PC, 192.168.100.139:47987), after the Host tray
+no-icon bug was root-caused and fixed (Host `c4f9250`, see Host
+STATUS.md "Tray window-creation failure").
+
+| Item | Evidence |
+|---|---|
+| Host tray icon in the user's interactive session | Host log: `13:47:08Z event="host.start" port="47987"` then `event="tray.icon"` (success path — the non-interactive SSH session logs `tray.icon_failed` instead) |
+| Connection + pairing over the LAN | Host log: `13:47:26Z session.hello peer="192.168.100.156:50205" state="pairing"` → `13:47:38Z session.pairing ... accepted="true" state="paired"` → `session.message kind="app_catalog_request" state="paired"` |
+| Liveness | `session.message kind="heartbeat" state="paired"` every 5 s, continuous for 4+ minutes after pairing |
+| Client UI state (user-confirmed) | `Connection: Paired`, `Host: DESKTOP-PC`, `No applications available yet` (correct: the Host catalog scanner is not implemented yet, so the catalog is honestly empty) |
+| Earlier same-day run | First pairing attempt also succeeded: `13:41:57Z session.pairing ... accepted="true"` (same evidence chain) |
+
+Notes: the pairing code was shown on the Host via the tray
+"Show pairing code..." dialog and entered in the Client by the user
+(FR-13 flow, as designed). The Client's default `127.0.0.1` was
+changed to `192.168.100.139` in the host-address field for the test
+(the field is editable and persists to Preferences).
+
 ## Blocked
 
-| Task | Blocker |
-|---|---|
-| LAN e2e test (Client ↔ Windows Host) | Needs the Windows Host running on the LAN (Host app verified on Windows at Host commit 870aec1 per the orchestrator; no Host was reachable from this machine for this task, so the e2e run is NOT RUN) |
+(none — the LAN e2e blocker is resolved, evidence above)
 
 ## Next tasks
 
-1. C-CONNECTION follow-up: LAN integration test against the real Windows
-   Host (connect, pair with the live code, catalog, heartbeat).
-2. C-CATALOG: catalog UI with entries, `app_catalog_changed` re-request,
+1. C-CATALOG: catalog UI with entries, `app_catalog_changed` re-request,
    launch lifecycle.
-3. C-INPUT: shortcut adaptation stack with FR-08/§6.4 coverage.
+2. C-INPUT: shortcut adaptation stack with FR-08/§6.4 coverage.
 
 ## Notes
 
