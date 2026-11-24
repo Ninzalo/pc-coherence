@@ -1,10 +1,12 @@
 
 #include "app/TrayController.hpp"
 
+#include "app/Win32Env.hpp"
+
 #include <shellapi.h>
-#include <windows.h>
 
 #include <cstdio>
+#include <cwchar>
 
 #include "app/resources/resource.h"
 
@@ -76,8 +78,7 @@ void TrayController::showStatus() {
   LoadStringW(mod, IDS_STATUS_FORMAT, format, ARRAYSIZE(format));
   TrayStatus s = statusFn_();
   wchar_t text[192];
-  StringFormatW(format, ARRAYSIZE(text), L"%d", (DWORD)s.port);
-  StringFormatW(text, ARRAYSIZE(text), L"%d", (DWORD)s.connections);
+  wsprintfW(text, ARRAYSIZE(text), format, (UINT)s.port, (UINT)s.connections);
   MessageBoxW(hwnd_, text, L"Remote Windows Host", MB_OK | MB_ICON_INFORMATION);
 }
 

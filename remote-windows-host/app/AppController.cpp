@@ -14,8 +14,7 @@
 #include "network/signaling_server.hpp"
 
 #ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
+#include "app/Win32Env.hpp"
 #endif
 
 using namespace remotewindows;

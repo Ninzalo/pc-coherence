@@ -5,9 +5,9 @@
 #include <ctime>
 
 #ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
 #include <shlobj.h>
-#include <windows.h>
+
+#include "app/Win32Env.hpp"
 #endif
 
 namespace remotewindows::app {
