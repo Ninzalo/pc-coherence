@@ -22,14 +22,18 @@ VERSION="$(tr -d '[:space:]' < "$HOST_PROTO/VERSION")"
 rm -rf "$CONTRACT"
 mkdir -p "$CONTRACT/test-vectors"
 cp "$HOST_PROTO/remote_windows.proto" "$HOST_PROTO/VERSION" "$HOST_PROTO/README.md" "$CONTRACT/"
-cp "$HOST_PROTO"/test-vectors/*.json "$CONTRACT/test-vectors/"
+# All golden test vectors, including subdirectories (e.g. media/).
+while IFS= read -r f; do
+  mkdir -p "$CONTRACT/$(dirname "$f")"
+  cp "$HOST_PROTO/$f" "$CONTRACT/$f"
+done < <(cd "$HOST_PROTO" && find test-vectors -type f -name '*.json' | LC_ALL=C sort)
 
 ( cd "$CONTRACT" && {
     echo "README.md"
     echo "VERSION"
     echo "remote_windows.proto"
-    for f in test-vectors/*.json; do echo "$f"; done
-  } | LC_ALL=C sort | xargs shasum -a 256 > SHA256SUMS )
+    find test-vectors -type f -name '*.json' | LC_ALL=C sort
+  } | xargs shasum -a 256 > SHA256SUMS )
 
 COMMIT="$(git -C "$CLIENT_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
 cat > "$CONTRACT/PROVENANCE" <<EOF

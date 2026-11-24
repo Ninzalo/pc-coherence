@@ -12,7 +12,8 @@ VERIFIED — see "LAN end-to-end pairing (verified)" below).
 | `network/` portable signaling: length-prefixed framing, TCP socket, signaling server/client (HELLO/pairing/heartbeat) | `signaling_e2e_test` loopback + concurrent clients + malformed-frame handling pass |
 | `app/` session authorization + pairing state machine (RW-H-004, H-NET): per-connection `SessionAuth` (unpaired/pairing/paired/locked), shared `PairingHost` one-time-code store (single use), typed `not_paired` rejections for gated control kinds, post-pairing empty catalog, extended `--selftest` full handshake; tray pairing-code display/rotation (RW-H-005, H-FOUND) | `session_auth_test` (21 tests: 16 state-machine + 2 PairingHost rotation + 3 loopback e2e; the 3 RW-H-005 tests added 2026-11-24) + `--selftest` report (evidence below) |
 | `docs/PROTOCOL.md` framing, validation, authorization, lifecycle rules | present, normative for both peers; codec now enforces `window_id` UUID format and `title` ≤ 512 chars at decode time (`bad_uuid` / `title_too_long`) |
-| ADRs 0001–0007 | `docs/decisions/` |
+| Media channel normative spec (RW-H-006, CONTRACT): PROTOCOL §9 — TCP 47988, handshake, key derivation (matching `core/pairing.cpp`), little-endian binary framing, stream lifecycle, robustness, security (ADR-0008) + golden vectors `protocol/test-vectors/media/` (3× AES-256-GCM + key derivation; generated with CryptoKit, independently re-verified with pyca/cryptography, OpenSSL 3.5.9 EVP, and shasum CLI) | `bash tools/export_protocol.sh <dir>` → bundle incl. `test-vectors/media/*.json` in SHA256SUMS (27 entries, verified); Client snapshot re-synced via `tools/sync_protocol_from_host.sh` (`shasum -a 256 -c` OK); §7.4 session-key formula corrected to the implemented `rwh-pairing-v1\|code\|host_name`; stale WebRTC note in §1 removed |
+| ADRs 0001–0009 | `docs/decisions/` (0008: MVP media transport — TCP 47988, H.264, AES-256-GCM, WebRTC deferred; 0009: single-repo topology deviation from plan §4.3) |
 
 ## Last successful build (this tree, portable core on macOS)
 
@@ -112,11 +113,10 @@ Protocol gaps found (CONTRACT follow-up requested, see report):
 `input_event` has no result kind and `app_catalog` carries no
 `error_code` field in schema v0.1.0, so unpaired requests of those two
 kinds cannot be answered with a typed error envelope; the Host drops
-them (logged as `session.gated`). Also: PROTOCOL §7.4 documents the
-session key as `hex(sha256("rwpair1|" + code + "|" + nonce))` while
-`core::PairingManager::deriveSessionKey` uses `"rwh-pairing-v1|" + code
-+ "|" + host_name` — the core (executable) definition is what the Host
-uses; the doc should be aligned.
+them (logged as `session.gated`). (Resolved 2026-11-24 in the RW-H-006
+integration: PROTOCOL §7.4 now documents the implemented
+`rwh-pairing-v1|code|host_name` derivation — the `rwpair1|code|nonce`
+form existed in no code.)
 
 ### SDK 10.0.26100 discrepancies (plan rule 2 — recorded 2026-11-24)
 
@@ -283,15 +283,20 @@ Windows runner (DESKTOP-PC), 2026-11-24:
 
 | Task | Blocker |
 |---|---|
-| Stage 1 one-window video end-to-end | WebRTC pinned build not integrated (see DEPENDENCIES.md) |
+| (none currently — the Stage 1 WebRTC blocker was resolved 2026-11-24 by ADR-0008: MVP media rides TCP 47988; WebRTC deferred) | — |
 
 ## Next tasks
 
-1. H-CATALOG: Start Menu scan + `LAUNCH_APP` by allow-listed `app_id`
-   (IShellLinkW / ShellExecuteExW) — the next Host feature track; the
-   Client already sends `app_catalog_request` on pairing and renders
-   "No applications available yet" while the catalog is empty. Per
-   orchestrator, H-MEDIA (capture/video) is the parallel Host track.
+1. **RW-H-007 (H-MEDIA): portable media core** — new `media/` library:
+   binary packet framing (PROTOCOL §9.4), stream key derivation (§9.3,
+   golden vectors in `protocol/test-vectors/media/`), stream registry
+   (per-stream FPS gate from `core/fps_policy`), HMAC-SHA256 (for the
+   §9.2 handshake), and the Windows CNG AES-256-GCM backend (runner-only
+   test against the golden vectors). Portable parts must pass on macOS.
+2. H-CATALOG: Start Menu scan + `LAUNCH_APP` by allow-listed `app_id`
+   (IShellLinkW / ShellExecuteExW) — the Client already sends
+   `app_catalog_request` on pairing and renders "No applications
+   available yet" while the catalog is empty.
 
 Done:
 
@@ -314,3 +319,9 @@ Done:
 - H-NET / C-CONNECTION: LAN end-to-end pairing with the macOS Client —
   DONE 2026-11-24 (evidence in the "LAN end-to-end pairing (verified)"
   section above; Client `docs/STATUS.md` mirrors it).
+- CONTRACT: RW-H-006 media-channel spec — DONE 2026-11-24 at `d270d15`
+  (PROTOCOL §9 normative 9.1–9.7; golden vectors 3× AES-256-GCM + key
+  derivation, triple-verified; 104/104 macOS ctest; `.proto`/`VERSION`
+  untouched; §7.4 formula fix + export-script media-vector gap +
+  ADR-0008 nonce-prefix wording resolved in the same integration,
+  commit below).

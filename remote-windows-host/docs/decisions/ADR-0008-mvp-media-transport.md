@@ -54,8 +54,10 @@ replaced by this ADR for the MVP.
     format version `u8 = 1`, stream id `u16` (first 16 bits of
     `sha256(window_id)`), flags `u8` (bit0 keyframe), frame sequence `u32`,
     payload length `u32` — followed by the **AES-256-GCM ciphertext** of the
-    H.264 byte payload + 16-byte GCM tag. Nonce: 12 bytes = 8-byte random
-    per-stream prefix + 4-byte little-endian packet counter.
+    H.264 byte payload + 16-byte GCM tag. Nonce: 12 bytes = 8-byte
+    deterministic per-stream prefix (first 8 bytes of
+    `sha256("rwh-media-nonce-v1|" + session_key_hex + "|" + window_id)`,
+    PROTOCOL §9.3) + 4-byte little-endian packet counter.
   - **Reliability/ordering:** TCP (reliable, in-order). LAN loss is
     negligible at the measured link rates; head-of-line blocking is
     acceptable for MVP latency; no custom transport reimplementation.

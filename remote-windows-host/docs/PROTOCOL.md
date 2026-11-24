@@ -145,9 +145,13 @@ power control.
    shown on the Host screen; client sends `pairing_challenge` with the
    code + echoed nonce.
 4. Host validates (code match, nonce echo, attempt limit: 3 failures then
-   60 s lockout) and answers `pairing_result`. On success both sides store
-   the derived pairing key (Host: protected local file; Client: Keychain).
-   The key = `hex(sha256("rwpair1|" + code + "|" + nonce))`.
+   60 s lockout) and answers `pairing_result`. On success both peers derive
+   the session key independently:
+   `session_key=hex(sh...v1|" + code + "|" + host_name))`
+   (`core::PairingManager::deriveSessionKey`). MVP: pairing state is kept in
+   memory on the Host and the Client. Persistent storage (Host: protected
+   local file, Client: Keychain) is planned; when introduced it must store
+   only the derived session key, never the one-time code.
 5. Steady state: heartbeats every 10 s from each side; a peer that is
    silent for 60 s is disconnected by the other side (input state reset
    on the Host: no key or button may stay logically pressed).

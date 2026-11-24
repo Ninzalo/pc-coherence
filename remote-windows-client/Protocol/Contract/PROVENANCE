@@ -1,4 +1,4 @@
 source = remote-windows-host/protocol (single repository, root ADR-0008)
 host_protocol_version = 0.1.0
-host_repo_commit = single-repo:84d68860e140091425a542ed3223cd6eb9099b3b
-synced = 2026-11-24T07:34:08Z
+host_repo_commit = single-repo:d270d15b452d38d6b042fde6ae9de21013d0c406
+synced = 2026-11-24T15:46:19Z

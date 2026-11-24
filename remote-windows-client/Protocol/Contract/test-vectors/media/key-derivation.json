@@ -1,0 +1,25 @@
+{
+  "note": "Golden key-derivation vectors for the RW media channel (docs/PROTOCOL.md §9.3). Inputs are synthetic (not a real secret). Every implementation MUST reproduce these values exactly, using the same lowercase-hex SHA-256 as core/sha256.cpp.",
+  "generator": "Apple CryptoKit (SHA256), Swift 6.4.2, macOS 27.2.1",
+  "generated": "2026-11-24",
+  "verified_with": [
+    "pyca/cryptography / hashlib.sha256 (Python 3.9)",
+    "OpenSSL 3.5.9 (EVP_sha256)",
+    "shasum -a 256 (macOS CLI)"
+  ],
+  "inputs": {
+    "code": "RWH-DEADBEEF",
+    "host_name": "TESTHOST",
+    "window_id": "11111111-2222-3333-4444-555555555555"
+  },
+  "formulas": {
+    "session_key": "hex(sha256('rwh-pairing-v1|' + code + '|' + host_name))",
+    "media_key": "hex(sha256('rwh-media-v1|' + session_key_hex + '|' + window_id))",
+    "nonce_prefix": "first 8 bytes of sha256('rwh-media-nonce-v1|' + session_key_hex + '|' + window_id)"
+  },
+  "values": {
+    "session_key": "ccce75c3700c06a60acb90392eefb9b90ac94ad7ce6d68a92825ff64bdfb66ab",
+    "media_key": "2ddf8654a5339fd24028ab0fe022ebe7af55a91c419a9dc46b4d2c406f162e4c",
+    "nonce_prefix": "56477b51235c24c2"
+  }
+}
