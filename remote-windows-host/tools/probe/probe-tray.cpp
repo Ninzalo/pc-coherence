@@ -11,10 +11,12 @@
 #define UNICODE
 #define _UNICODE
 #endif
+#include <winsock2.h>
 #include <windows.h>
 
 #include <cstdarg>
 #include <cstdio>
+#include <thread>
 
 static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
   if (m == WM_DESTROY) {
@@ -102,10 +104,46 @@ int main() {
   const HWND h6 = makeWindow(L"RWHProbeFull", "F msgonly after ctrl handler",
                              HWND_MESSAGE, 0, 0, 0, 0, 0, FALSE);
 
-  HWND wins[] = {h1, h2, h3, h4, h5, h6};
+  // G/H: replicate rwh-host's process state at tray.run() time —
+  // signaling server already up (listening socket + active accept
+  // thread) — then create windows. Isolates whether a running accept
+  // thread changes window creation (rwh-host fails; A-F here pass).
+  WSADATA wsa{};
+  const int wsa_rc = WSAStartup(MAKEWORD(2, 2), &wsa);
+  std::printf("wsa=%d\n", wsa_rc);
+  const SOCKET s = socket(AF_INET, SOCK_STREAM, 0);
+  int yes = 1;
+  setsockopt(s, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&yes),
+             sizeof(yes));
+  sockaddr_in sa{};
+  sa.sin_family = AF_INET;
+  sa.sin_port = htons(47988);
+  sa.sin_addr.s_addr = INADDR_ANY;
+  const int bind_rc = bind(s, reinterpret_cast<sockaddr*>(&sa), sizeof(sa));
+  const int listen_rc = listen(s, 8);
+  std::printf("bind=%d listen=%d\n", bind_rc, listen_rc);
+  std::thread acceptor([s] {
+    for (;;) {
+      const SOCKET c = accept(s, nullptr, nullptr);
+      if (c == INVALID_SOCKET) break;
+      closesocket(c);
+    }
+  });
+  acceptor.detach();
+  Sleep(300);
+  const HWND h7 = makeWindow(L"RWHProbeFull",
+                             "G msgonly with live accept thread", HWND_MESSAGE,
+                             0, 0, 0, 0, 0, FALSE);
+  const HWND h8 = makeWindow(L"RWHProbeFull", "H normal hidden with accept",
+                             nullptr, WS_OVERLAPPED, -32000, -32000, 1, 1,
+                             FALSE);
+
+  HWND wins[] = {h1, h2, h3, h4, h5, h6, h7, h8};
   for (HWND h : wins) {
     if (h) DestroyWindow(h);
   }
+  if (s != INVALID_SOCKET) closesocket(s);
+  WSACleanup();
   std::printf("probe done\n");
   return 0;
 }
