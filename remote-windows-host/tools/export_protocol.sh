@@ -11,5 +11,5 @@ cp "$PROTO/remote_windows.proto" "$PROTO/VERSION" "$PROTO/README.md" "$OUT/"
 cp "$PROTO"/test-vectors/*.json "$OUT/test-vectors/"
 ( cd "$OUT" && { echo "README.md"; echo "VERSION"; echo "remote_windows.proto";
                  for f in test-vectors/*.json; do echo "$f"; done; } \
-    | LC_ALL=C sort | sha256sum > SHA256SUMS )
+    | LC_ALL=C sort | xargs sha256sum > SHA256SUMS )
 echo "Contract bundle exported to $OUT (version $(cat "$PROTO/VERSION" | tr -d '[:space:]'))"
