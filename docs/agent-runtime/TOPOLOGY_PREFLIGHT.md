@@ -31,11 +31,13 @@ Required by plan Section 18.8. Verified on 2026-11-24; no credentials stored.
   NOTE: the scheduled task `rwh_vs_install` (VS Build Tools install) is
   obsolete now — it was created before the existing install was found and
   its last run exited 1 on UAC; it is being deleted.
-- [ ] Windows runner builds a harmless test project and reports tool
-  versions — **IN PROGRESS**: cmake/ninja install + dev-env compile
-  smoke test pending (toolchain itself confirmed present).
-- [ ] Specific Host commit buildable by the runner with exact-SHA
-  verification — **NOT STARTED** (toolchain ready; awaiting cmake/ninja).
+- [x] Windows runner builds a project and reports tool versions —
+  verified 2026-11-24: runner `status` reports cmake 4.5.1, ninja 1.13.2,
+  git 2.54.0; `unit-tests` action builds the Host tree with MSVC.
+- [x] Specific Host commit buildable by the runner with exact-SHA
+  verification — verified 2026-11-24: SHA `9450a49f8c58acb8c93680939e8b7f2dcb95d6c3`
+  checked out, built (RelWithDebInfo/Ninja/MSVC 14.51), `100% tests passed
+  out of 83`, `RWH status=tests_ok`. See host `docs/STATUS.md`.
 - [x] Mac mini builds/launches/tests the macOS Client — verified
   2026-11-24: `swift build` exit 0; `swift run RemoteWindowsAppTests`
   83/83 checks pass (exit 0); `tools/launch_smoke_test.sh` — app running
