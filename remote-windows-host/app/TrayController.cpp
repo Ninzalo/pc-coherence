@@ -121,7 +121,7 @@ int TrayController::run() {
     return 2;
   }
 
-  HWND module_h = GetModuleHandleW(nullptr);
+  HMODULE module_h = GetModuleHandleW(nullptr);
   hwnd_ = CreateWindowExW(0, kWindowClass, L"RWH", 0, 0, 0, 0, 0,
                           HWND_MESSAGE, nullptr, module_h, this);
   if (!hwnd_) {
@@ -140,7 +140,7 @@ int TrayController::run() {
       const DWORD e_normal = GetLastError();
       err_ = "CreateWindowExW failed: msgonly=" + std::to_string(e_msgonly)
              + " normal=" + std::to_string(e_normal)
-             + " session=" + std::to_string(ProcessSessionId())
+             + " pid=" + std::to_string(GetCurrentProcessId())
              + " module=" + (module_h != nullptr ? "ok" : "null");
       std::fprintf(stderr, "%s\n", err_.c_str());
       return 2;
