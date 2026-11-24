@@ -56,18 +56,26 @@ bool isGatedControlKind(const std::string& kind) {
 PairingHost::PairingHost()
     // PROTOCOL.md §7.4: 3 failures then a 60 s lockout; code TTL per
     // core::PairingConfig default (300 s).
-    : mgr_(core::PairingConfig{"", 3, 60, 300}) {}
+    : mgr_(core::PairingConfig{"", 3, 60, kCodeTtlSeconds}) {}
 
 void PairingHost::beginEpoch(uint64_t now_ms) {
   std::lock_guard<std::mutex> lk(mu_);
   std::string code;
   mgr_.rotateCode(code, now_ms);
   code_ = std::move(code);
+  code_created_ms_ = now_ms;
 }
 
 bool PairingHost::hasCode() const {
   std::lock_guard<std::mutex> lk(mu_);
   return !code_.empty();
+}
+
+bool PairingHost::hasActiveCode(uint64_t now_ms) const {
+  std::lock_guard<std::mutex> lk(mu_);
+  if (code_.empty()) return false;
+  // Same comparison as core::PairingManager::verifyCode (strict >).
+  return now_ms - code_created_ms_ <= uint64_t(kCodeTtlSeconds) * 1000;
 }
 
 std::string PairingHost::currentCode() const {
@@ -342,6 +350,12 @@ std::shared_ptr<SessionAuth> SignalingSessionHandler::sessionFor(
 size_t SignalingSessionHandler::sessionCount() const {
   std::lock_guard<std::mutex> lk(mu_);
   return sessions_.size();
+}
+
+std::string SignalingSessionHandler::rotateOrCurrentCode() {
+  const uint64_t now = nowMs();
+  if (!pairing_.hasActiveCode(now)) pairing_.beginEpoch(now);
+  return pairing_.currentCode();  // never logged
 }
 
 bool SignalingSessionHandler::onEnvelope(net::Connection& c,

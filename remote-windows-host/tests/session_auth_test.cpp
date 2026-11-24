@@ -630,3 +630,143 @@ TEST(SessionAuthE2E, UnpairedClientControlRejectedOverChannel) {
   client.close();
   server.stop();
 }
+
+// --------------------------------------------------- RW-H-005: tray path
+// FR-13 ("one-time code ... confirmed on the Host"): after a successful
+// pairing consumes the code, the tray's rotate path (beginEpoch, i.e.
+// core::PairingManager::rotateCode) yields a fresh code that pairs
+// again; the consumed code no longer pairs. Attempt counters / lockout
+// stay in core::PairingManager (PROTOCOL §7.4) — unchanged here.
+
+TEST(PairingHost, RotationAfterConsumeYieldsFreshValidCode) {
+  app::PairingHost host;
+  uint64_t now = kT0;
+  host.beginEpoch(now);
+  const std::string first = host.currentCode();
+  ASSERT_EQ(first.size(), 6u);
+  ASSERT_TRUE(host.hasCode());
+  ASSERT_TRUE(host.hasActiveCode(now));
+
+  // Successful verification + consume — exactly what SessionAuth does on
+  // an accepted pairing.
+  const core::PairingState ok = host.verifyCode(first, now);
+  ASSERT_TRUE(ok.paired);
+  host.consume();
+  EXPECT_FALSE(host.hasCode());
+  EXPECT_FALSE(host.hasActiveCode(now));
+
+  // Rotate (tray "Show pairing code..." with no active code). Rotation
+  // is deterministic in the timestamp, so advance the clock until a
+  // distinct code appears (bounded; one iteration almost always suffices).
+  std::string second;
+  for (int i = 0; i < 10; ++i) {
+    now += 1000;
+    host.beginEpoch(now);
+    second = host.currentCode();
+    if (second != first) break;
+  }
+  ASSERT_EQ(second.size(), 6u);
+  ASSERT_NE(second, first);
+  ASSERT_TRUE(host.hasCode());
+  ASSERT_TRUE(host.hasActiveCode(now));
+
+  // The old consumed code no longer pairs...
+  const core::PairingState stale = host.verifyCode(first, now);
+  EXPECT_FALSE(stale.paired);
+  EXPECT_EQ(stale.error, "invalid_code");
+  // ...and the fresh code does.
+  const core::PairingState fresh = host.verifyCode(second, now);
+  EXPECT_TRUE(fresh.paired);
+}
+
+TEST(PairingHost, ExpiredCodeIsNotActiveAndRotates) {
+  app::PairingHost host;
+  uint64_t now = kT0;
+  host.beginEpoch(now);
+  ASSERT_TRUE(host.hasActiveCode(now));
+  now += 301'000;  // beyond the 300 s code TTL
+  EXPECT_TRUE(host.hasCode());  // unconsumed but expired
+  EXPECT_FALSE(host.hasActiveCode(now));
+  // The rotate path treats an expired code like a consumed one.
+  host.beginEpoch(now);
+  ASSERT_TRUE(host.hasCode());
+  ASSERT_TRUE(host.hasActiveCode(now));
+}
+
+TEST(SessionAuthE2E, RotateOrCurrentCodeAfterConsumePairsNewClient) {
+  app::SignalingSessionHandler handler("DESKTOP-PC");  // logger: nullptr
+  net::SignalingServer server(&handler);
+  std::string err;
+  ASSERT_TRUE(server.start("127.0.0.1", 0, err)) << err;
+  auto port = server.port(err);
+
+  // Tray "Show pairing code..." with an active code: stable (no needless
+  // rotation while the code is valid).
+  const std::string first = handler.rotateOrCurrentCode();
+  ASSERT_EQ(first.size(), 6u);
+  EXPECT_EQ(handler.rotateOrCurrentCode(), first);
+
+  net::SignalingClient client;
+  ASSERT_TRUE(client.connectTo("127.0.0.1", port, err)) << err;
+  ASSERT_TRUE(client.sendEnvelope(clientHello(), err)) << err;
+  std::string err2;
+  auto r1 = client.readEnvelope(5000, err, err2);
+  ASSERT_TRUE(r1.has_value()) << err;
+  EXPECT_EQ(r1->kind, "hello");
+  auto r2 = client.readEnvelope(5000, err, err2);
+  ASSERT_TRUE(r2.has_value()) << err;
+  EXPECT_EQ(r2->kind, "pairing_challenge");
+  const auto* pc = std::get_if<proto::PairingChallenge>(&r2->payload);
+  ASSERT_NE(pc, nullptr);
+  ASSERT_TRUE(pc->challenge_nonce.has_value());
+  // Session state (what the tray Status item reports).
+  EXPECT_EQ(handler.sessionCount(), 1u);
+
+  proto::Envelope attempt;
+  attempt.kind = "pairing_challenge";
+  proto::PairingChallenge ap;
+  ap.one_time_code = first;
+  ap.challenge_nonce = *pc->challenge_nonce;
+  attempt.payload = ap;
+  ASSERT_TRUE(client.sendEnvelope(attempt, err)) << err;
+  auto r3 = client.readEnvelope(5000, err, err2);
+  ASSERT_TRUE(r3.has_value()) << err;
+  const auto* pr = std::get_if<proto::PairingResult>(&r3->payload);
+  ASSERT_NE(pr, nullptr);
+  ASSERT_TRUE(pr->accepted);
+
+  // The one-time code is consumed: the next show must rotate a fresh one.
+  const std::string second = handler.rotateOrCurrentCode();
+  ASSERT_EQ(second.size(), 6u);
+  EXPECT_NE(second, first);
+
+  // The rotated code works: a second client pairs with it.
+  net::SignalingClient second_client;
+  ASSERT_TRUE(second_client.connectTo("127.0.0.1", port, err)) << err;
+  ASSERT_TRUE(second_client.sendEnvelope(clientHello(), err)) << err;
+  auto s1 = second_client.readEnvelope(5000, err, err2);
+  ASSERT_TRUE(s1.has_value()) << err;
+  EXPECT_EQ(s1->kind, "hello");
+  auto s2 = second_client.readEnvelope(5000, err, err2);
+  ASSERT_TRUE(s2.has_value()) << err;
+  EXPECT_EQ(s2->kind, "pairing_challenge");
+  const auto* pc2 = std::get_if<proto::PairingChallenge>(&s2->payload);
+  ASSERT_NE(pc2, nullptr);
+  ASSERT_TRUE(pc2->challenge_nonce.has_value());
+  proto::Envelope attempt2;
+  attempt2.kind = "pairing_challenge";
+  proto::PairingChallenge ap2;
+  ap2.one_time_code = second;
+  ap2.challenge_nonce = *pc2->challenge_nonce;
+  attempt2.payload = ap2;
+  ASSERT_TRUE(second_client.sendEnvelope(attempt2, err)) << err;
+  auto s3 = second_client.readEnvelope(5000, err, err2);
+  ASSERT_TRUE(s3.has_value()) << err;
+  const auto* pr2 = std::get_if<proto::PairingResult>(&s3->payload);
+  ASSERT_NE(pr2, nullptr);
+  EXPECT_TRUE(pr2->accepted);
+
+  client.close();
+  second_client.close();
+  server.stop();
+}

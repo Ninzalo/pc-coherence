@@ -17,6 +17,7 @@ constexpr wchar_t kWindowClass[] = L"RWHTrayWindow";
 constexpr UINT kTrayId = 1;
 constexpr UINT kMenuStatus = 1;
 constexpr UINT kMenuExit = 2;
+constexpr UINT kMenuPairingCode = 3;
 constexpr UINT kTrayCallback = WM_APP + 1;
 
 TrayController* selfOf(HWND hwnd) {
@@ -25,8 +26,10 @@ TrayController* selfOf(HWND hwnd) {
 }
 }  // namespace
 
-TrayController::TrayController(std::function<TrayStatus()> statusFn)
-    : statusFn_(std::move(statusFn)) {}
+TrayController::TrayController(std::function<TrayStatus()> statusFn,
+                               std::function<std::string()> pairingCodeFn)
+    : statusFn_(std::move(statusFn)),
+      pairingCodeFn_(std::move(pairingCodeFn)) {}
 
 TrayController::~TrayController() = default;
 
@@ -49,6 +52,7 @@ LRESULT CALLBACK TrayController::wndProc(HWND hwnd, UINT msg, WPARAM wParam,
     case WM_COMMAND:
       if (self) {
         if (wParam == kMenuStatus) self->showStatus();
+        else if (wParam == kMenuPairingCode) self->showPairingCode();
         else if (wParam == kMenuExit) PostQuitMessage(0);
       }
       return 0;
@@ -63,6 +67,10 @@ void TrayController::showMenu(HWND hwnd) {
   wchar_t item[128];
   LoadStringW(mod, IDS_MENU_STATUS, item, ARRAYSIZE(item));
   AppendMenuW(menu, MF_STRING, kMenuStatus, item);
+  if (pairingCodeFn_) {
+    LoadStringW(mod, IDS_MENU_PAIRING_CODE, item, ARRAYSIZE(item));
+    AppendMenuW(menu, MF_STRING, kMenuPairingCode, item);
+  }
   LoadStringW(mod, IDS_MENU_EXIT, item, ARRAYSIZE(item));
   AppendMenuW(menu, MF_STRING, kMenuExit, item);
 
@@ -77,9 +85,27 @@ void TrayController::showStatus() {
   wchar_t format[128];
   LoadStringW(mod, IDS_STATUS_FORMAT, format, ARRAYSIZE(format));
   TrayStatus s = statusFn_();
-  wchar_t text[192];
-  wsprintfW(text, format, (UINT)s.port, (UINT)s.connections);
-  MessageBoxW(hwnd_, text, L"Remote Windows Host", MB_OK | MB_ICONINFORMATION);
+  wchar_t text[256];
+  wsprintfW(text, format, (UINT)s.port, (UINT)s.connections,
+            (UINT)s.pairing_sessions);
+  wchar_t title[64];
+  LoadStringW(mod, IDS_APP_TITLE, title, ARRAYSIZE(title));
+  MessageBoxW(hwnd_, text, title, MB_OK | MB_ICONINFORMATION);
+}
+
+void TrayController::showPairingCode() {
+  // FR-13 UI channel: the one-time code is displayed via MessageBox
+  // ONLY. It is never logged and never written to a file (AGENTS rule 9).
+  HMODULE mod = GetModuleHandleW(nullptr);
+  wchar_t format[128];
+  LoadStringW(mod, IDS_PAIRING_CODE_FORMAT, format, ARRAYSIZE(format));
+  const std::string code = pairingCodeFn_();
+  const std::wstring wcode(code.begin(), code.end());  // 6 ASCII digits
+  wchar_t text[256];
+  wsprintfW(text, format, wcode.c_str());
+  wchar_t title[64];
+  LoadStringW(mod, IDS_PAIRING_CODE_TITLE, title, ARRAYSIZE(title));
+  MessageBoxW(hwnd_, text, title, MB_OK | MB_ICONINFORMATION);
 }
 
 int TrayController::run() {

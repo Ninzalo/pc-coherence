@@ -6,7 +6,10 @@ STRINGTABLE
 BEGIN
   IDS_APP_TITLE     "Remote Windows Host"
   IDS_TRAY_TOOLTIP  "Remote Windows Host (signaling server)"
-  IDS_STATUS_FORMAT "Windows Host running on port %1 (connections: %2)"
+  IDS_STATUS_FORMAT "Windows Host running on port %1 (connections: %2, pairing sessions: %3)"
   IDS_MENU_STATUS   "Status..."
+  IDS_MENU_PAIRING_CODE "Show pairing code..."
   IDS_MENU_EXIT     "Exit"
+  IDS_PAIRING_CODE_TITLE  "Pairing code"
+  IDS_PAIRING_CODE_FORMAT "Enter this one-time code in the macOS Client:\n\n%s"
 END

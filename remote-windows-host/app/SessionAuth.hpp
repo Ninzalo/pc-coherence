@@ -64,6 +64,12 @@ class PairingHost {
   // True while a generated, not-yet-consumed code is available.
   bool hasCode() const;
 
+  // True while the generated code is available AND within its TTL
+  // (core::PairingConfig code_ttl_seconds). Consumed OR expired codes
+  // report false — the tray's rotate path (FR-13) must not display a
+  // dead code.
+  bool hasActiveCode(uint64_t now_ms) const;
+
   // The current code (in-process access, e.g. the selftest client).
   // NEVER log this value.
   std::string currentCode() const;
@@ -75,9 +81,12 @@ class PairingHost {
   void consume();
 
  private:
+  // Must stay in sync with the PairingConfig passed to mgr_ below.
+  static constexpr uint32_t kCodeTtlSeconds = 300;
   core::PairingManager mgr_;
   mutable std::mutex mu_;
   std::string code_;  // never logged
+  uint64_t code_created_ms_ = 0;  // stamped in beginEpoch (drives TTL)
 };
 
 // Per-connection session state machine. Construct one per TCP connection
@@ -135,6 +144,14 @@ class SignalingSessionHandler : public net::SignalingServer::Handler {
   // never logged).
   std::string currentPairingCode() const { return pairing_.currentCode(); }
   size_t sessionCount() const;
+
+  // FR-13 UI channel (tray "Show pairing code...", RW-H-005): returns
+  // the current active one-time code; if the code was already consumed
+  // or expired (no active code) it starts a fresh epoch via
+  // PairingHost::beginEpoch (core::PairingManager::rotateCode) and
+  // returns the new code. Display-only: the value is shown via
+  // MessageBox by the caller and is NEVER logged or written to a file.
+  std::string rotateOrCurrentCode();
 
  private:
   std::shared_ptr<SessionAuth> sessionFor(net::Connection* c);

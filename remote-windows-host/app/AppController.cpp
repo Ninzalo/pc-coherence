@@ -84,9 +84,15 @@ int AppController::runGui(const Options& opts) {
             {{"addr", addr}, {"port", std::to_string(actual)}});
 
   TrayController tray(
-      [&server]() -> TrayStatus {
+      [&server, &handler]() -> TrayStatus {
         std::string e2;
-        return TrayStatus{server.port(e2), server.connectionCount()};
+        return TrayStatus{server.port(e2), server.connectionCount(),
+                          handler.sessionCount()};
+      },
+      [&handler]() -> std::string {
+        // FR-13 UI channel: shown via MessageBox by the tray; the code
+        // is never logged or persisted (AGENTS rule 9).
+        return handler.rotateOrCurrentCode();
       });
   int rc = tray.run();
 
