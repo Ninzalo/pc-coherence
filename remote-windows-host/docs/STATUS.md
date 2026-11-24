@@ -13,7 +13,7 @@ VERIFIED — see "LAN end-to-end pairing (verified)" below).
 | `app/` session authorization + pairing state machine (RW-H-004, H-NET): per-connection `SessionAuth` (unpaired/pairing/paired/locked), shared `PairingHost` one-time-code store (single use), typed `not_paired` rejections for gated control kinds, post-pairing empty catalog, extended `--selftest` full handshake; tray pairing-code display/rotation (RW-H-005, H-FOUND) | `session_auth_test` (21 tests: 16 state-machine + 2 PairingHost rotation + 3 loopback e2e; the 3 RW-H-005 tests added 2026-11-24) + `--selftest` report (evidence below) |
 | `docs/PROTOCOL.md` framing, validation, authorization, lifecycle rules | present, normative for both peers; codec now enforces `window_id` UUID format and `title` ≤ 512 chars at decode time (`bad_uuid` / `title_too_long`) |
 | Media channel normative spec (RW-H-006, CONTRACT): PROTOCOL §9 — TCP 47988, handshake, key derivation (matching `core/pairing.cpp`), little-endian binary framing, stream lifecycle, robustness, security (ADR-0008) + golden vectors `protocol/test-vectors/media/` (3× AES-256-GCM + key derivation; generated with CryptoKit, independently re-verified with pyca/cryptography, OpenSSL 3.5.9 EVP, and shasum CLI) | `bash tools/export_protocol.sh <dir>` → bundle incl. `test-vectors/media/*.json` in SHA256SUMS (27 entries, verified); Client snapshot re-synced via `tools/sync_protocol_from_host.sh` (`shasum -a 256 -c` OK); §7.4 session-key formula corrected to the implemented `rwh-pairing-v1\|code\|host_name`; stale WebRTC note in §1 removed |
-| `media/` portable media core (RW-H-007, H-MEDIA): the machine-facing parts of PROTOCOL §9 — binary packet framing (§9.4, 13-byte LE header, exact-byte unit test), per-window stream key / nonce-prefix derivation (§9.3, golden `key-derivation.json` reproduced exactly), thread-safe stream registry (§9.5, per-stream `core::FpsGate`, 16-bit collision documented: last add wins), RFC 2104 HMAC-SHA256 (§9.2 handshake, RFC 4231 TC1/TC2), portable `IAead` interface + Windows CNG AES-256-GCM backend (`AeadCng`, WIN32-only TU, `aes-256-gcm.json` vectors are runner-only) | 127/127 CTest (previous 104 + 23 new media tests, command below); CNG backend test NOT RUN on macOS (Win32-only, entry below) |
+| `media/` portable media core (RW-H-007, H-MEDIA): the machine-facing parts of PROTOCOL §9 — binary packet framing (§9.4, 13-byte LE header, exact-byte unit test), per-window stream key / nonce-prefix derivation (§9.3, golden `key-derivation.json` reproduced exactly), thread-safe stream registry (§9.5, per-stream `core::FpsGate`, 16-bit collision documented: last add wins), RFC 2104 HMAC-SHA256 (§9.2 handshake, RFC 4231 TC1/TC2), portable `IAead` interface + Windows CNG AES-256-GCM backend (`AeadCng`, WIN32-only TU) | 127/127 macOS CTest (previous 104 + 23 new media tests, command below) + **CNG backend VERIFIED on the Windows runner**: `unit-tests` @ `d5c1f044` → `100% tests passed out of 130`, `RWH status=tests_ok`, incl. `MediaAeadCng.GoldenVectorsReproducedExactly` (all three `aes-256-gcm.json` ciphertext+tag values reproduced by live BCrypt on DESKTOP-PC), `RoundTrip1000Bytes`, `OpenRejectsTamperedCiphertext` (evidence below) |
 | ADRs 0001–0009 | `docs/decisions/` (0008: MVP media transport — TCP 47988, H.264, AES-256-GCM, WebRTC deferred; 0009: single-repo topology deviation from plan §4.3) |
 
 ## Last successful build (this tree, portable core on macOS)
@@ -50,6 +50,7 @@ self-consistency).
 | Runner | `tools/windows_runner.ps1` (PC: `C:\rwh\rwh-runner.ps1`, SHA256-verified at install) + `tools/windows-runner.sh` Mac wrapper; allow-listed actions only; machine-readable `RWH key=value` report |
 | Exact-SHA build + unit tests | `windows-runner.sh unit-tests` @ `9450a49f8c58acb8c93680939e8b7f2dcb95d6c3`: `RWH sha=9450a49...`, `100% tests passed out of 83`, `RWH ctest_exit=0`, `RWH status=tests_ok` (RelWithDebInfo, Ninja, MSVC) |
 | Portability fix found by the runner | POSIX `ssize_t` in the TCP layer is not declared by MSVC in C++ mode → `std::int64_t` (commit `978dc55`); clang still 83/83 |
+| CNG AES-256-GCM media backend (RW-H-007) | `unit-tests` @ `d5c1f044a89ca09122475f987059b536cda5f0b6` (2026-11-24): `100% tests passed out of 130`, `RWH ctest_exit=0`, `RWH status=tests_ok` — the 3 `MediaAeadCng` tests PASS on MSVC/SDK 26100: golden vectors (ciphertext+tag, all three), 1000-byte round-trip, tamper rejection. CNG API corrections found by the runner (SDK 10.0.26100): `BCryptCreateKey` absent → `BCryptGenerateSymmetricKey`; GCM nonce+tag via `BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO` (pPaddingInfo), NOT via pbIV (a pbIV-only nonce yields `STATUS_INVALID_PARAMETER`); `BCRYPT_INIT_AUTH_MODE_INFO(info)` takes the struct NAME (macro wraps param in `&`) |
 
 ## Windows Host app shell (H-FOUND) — verified
 
@@ -287,14 +288,6 @@ Windows runner (DESKTOP-PC), 2026-11-24:
   input (SendInput), power (SetSuspendState / InitiateSystemShutdownExW),
   catalog scan (IShellLinkW). **NOT RUN** — not implemented yet (next
   feature tracks: H-CATALOG, then H-MEDIA/H-WINDOWS/H-INPUT/H-POWER).
-- `media/aead_cng.cpp` + `tests/media_aead_cng_test.cpp` (RW-H-007):
-  Windows CNG (BCrypt*) AES-256-GCM backend for the media channel.
-  **NOT RUN on macOS** — WIN32-only translation unit, deliberately not
-  compiled on macOS (CMake `if(WIN32)`). The test reproduces ALL three
-  golden vectors in `protocol/test-vectors/media/aes-256-gcm.json`
-  (ciphertext AND tag), plus a 1000-byte seal→open round-trip and
-  tamper detection (tampered ciphertext byte, tampered tag byte, wrong
-  nonce) — to be run via the Windows runner.
 
 ## Blocked
 
@@ -315,8 +308,10 @@ Done:
   (branch `agent/H-MEDIA/RW-H-007`; `media/` library: §9.4 framing,
   §9.3 key derivation with the golden `key-derivation.json` reproduced
   exactly, §9.5 stream registry, §9.2 HMAC-SHA256, `IAead` + CNG
-  backend; 127/127 macOS ctest — previous 104 + 23 new. CNG backend
-  test NOT RUN on macOS (Win32-only; Windows runner pending).)
+  backend; 127/127 macOS ctest — previous 104 + 23 new; CNG backend
+  **verified on the Windows runner** 2026-11-24: 130/130 @ `d5c1f044`,
+  `RWH status=tests_ok`, golden AES-256-GCM vectors reproduced by live
+  BCrypt on DESKTOP-PC).
 - Windows runner (Section 18.4) — DONE 2026-11-24 (evidence above).
 - CONTRACT: first contract bundle export + Client snapshot sync —
   DONE 2026-11-24 (client `docs/STATUS.md`).
