@@ -10,6 +10,7 @@
 #   windows-runner.sh build
 #   windows-runner.sh unit-tests
 #   windows-runner.sh selftest
+#   windows-runner.sh probe-tray <40-hex-sha>   (window-creation diagnostic)
 #   windows-runner.sh clean
 #
 # Configuration via environment (no secrets in this file or in the repo):
@@ -20,8 +21,8 @@ set -eu
 
 ACTION="${1:-status}"
 case "$ACTION" in
-  status|prepare|build|unit-tests|selftest|clean) ;;
-  *) echo "unknown action: $ACTION (allow-list: status prepare build unit-tests selftest clean)" >&2; exit 2 ;;
+  status|prepare|build|unit-tests|selftest|probe-tray|clean) ;;
+  *) echo "unknown action: $ACTION (allow-list: status prepare build unit-tests selftest probe-tray clean)" >&2; exit 2 ;;
 esac
 
 SSH_HOST="${RWH_RUNNER_HOST:-Ninzalo@192.168.100.139}"

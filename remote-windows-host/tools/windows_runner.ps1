@@ -2,7 +2,7 @@
 # Allow-listed actions only; exact-SHA builds; machine-readable report lines
 # "RWH key=value". No arbitrary command execution.
 param(
-  [Parameter(Mandatory)][ValidateSet('status','prepare','build','unit-tests','selftest','clean')][string]$Action,
+  [Parameter(Mandatory)][ValidateSet('status','prepare','build','unit-tests','selftest','probe-tray','clean')][string]$Action,
   [string]$Sha
 )
 $ErrorActionPreference = 'Stop'
@@ -52,7 +52,7 @@ function load-vs-env {
 }
 
 if ($Sha -ne '' -and $Sha -notmatch '^[0-9a-f]{40}$') { die 'sha_rejected' }
-if (($Action -eq 'build' -or $Action -eq 'unit-tests' -or $Action -eq 'selftest') -and -not (Test-Path $proj)) { die 'not_prepared' }
+if (($Action -eq 'build' -or $Action -eq 'unit-tests' -or $Action -eq 'selftest' -or $Action -eq 'probe-tray') -and -not (Test-Path $proj)) { die 'not_prepared' }
 
 switch ($Action) {
   'status' {
@@ -129,5 +129,25 @@ switch ($Action) {
     emit 'selftest_exit' $rc
     if ($rc -eq 0) { emit 'status' 'selftest_ok'; exit 0 }
     else { emit 'status' 'selftest_failed'; exit $rc }
+  }
+  'probe-tray' {
+    # Window-creation diagnostic (tools/probe/probe-tray.cpp from the
+    # prepared checkout). Compiles a standalone probe and runs it in
+    # this session; prints one result line per test. Diagnostic only —
+    # no product code is modified or run.
+    $actual = git -C $src rev-parse HEAD
+    emit 'sha' $actual
+    load-vs-env
+    $probe = "$root\probe"
+    if (-not (Test-Path $probe)) { New-Item -ItemType Directory -Force -Path $probe | Out-Null }
+    Copy-Item "$proj\tools\probe\probe-tray.cpp" "$probe\probe-tray.cpp" -Force
+    $rc = run-native cl @('/nologo','/EHsc','/O2','/std:c++17',
+                          "/Fe:$probe\probe-tray.exe", "/Fo:$probe\",
+                          "$probe\probe-tray.cpp")
+    if ($rc -ne 0) { die 'probe_build_failed' }
+    $rc = run-native "$probe\probe-tray.exe" @()
+    emit 'probe_exit' $rc
+    emit 'status' 'probe_done'
+    exit 0
   }
 }
