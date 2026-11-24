@@ -133,7 +133,9 @@ bool AeadCng::seal(const uint8_t key[32], const uint8_t nonce[12],
     // No AAD (pbAuthData=NULL), no chaining (dwFlags=0, pbMacContext
     // =NULL — both zeroed by BCRYPT_INIT_AUTH_MODE_INFO).
     BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO info;
-    BCRYPT_INIT_AUTH_MODE_INFO(&info);
+    // NOTE: the 26100 macro wraps its param as (&param), so pass the
+    // struct NAME (not &info) — &info would expand to &&info.
+    BCRYPT_INIT_AUTH_MODE_INFO(info);
     info.pbNonce = const_cast<uint8_t*>(nonce);
     info.cbNonce = static_cast<ULONG>(kMediaNonceBytes);
     info.pbTag = out_ct_tag + in_len;
@@ -175,7 +177,9 @@ bool AeadCng::open(const uint8_t key[32], const uint8_t nonce[12],
     // caller's out buffer is written only on full success (never
     // partially written on an authentication failure).
     BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO info;
-    BCRYPT_INIT_AUTH_MODE_INFO(&info);
+    // NOTE: the 26100 macro wraps its param as (&param), so pass the
+    // struct NAME (not &info) — &info would expand to &&info.
+    BCRYPT_INIT_AUTH_MODE_INFO(info);
     info.pbNonce = const_cast<uint8_t*>(nonce);
     info.cbNonce = static_cast<ULONG>(kMediaNonceBytes);
     info.pbTag = const_cast<uint8_t*>(in) + pt_len;
