@@ -7,8 +7,10 @@ Date: 2026-11-23 · Status: accepted (explicit owner instruction)
 The development plan mandates exactly two Git repositories
 (`remote-windows-host`, `remote-windows-client`) and forbids a third
 monorepo. The owner explicitly instructed: create **one** local Git
-repository (this one), link it to `git@github.com:Ninzalo/pc-coherense.git`,
-and push each commit there.
+repository (this one), originally linked to
+`git@github.com:Ninzalo/pc-coherense.git` (2026-11-23), renamed by the
+owner to `git@github.com:Ninzalo/pc-coherence.git` on 2026-11-24 — all
+commits push there.
 
 ## Decision
 

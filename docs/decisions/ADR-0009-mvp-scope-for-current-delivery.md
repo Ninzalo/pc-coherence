@@ -1,4 +1,4 @@
-# ADR-0008: Scope of the first full-project delivery
+# ADR-0009: Scope of the first full-project delivery
 
 - Status: Accepted (2026-11-23)
 - Deciders: Hermes orchestrator, pending owner review

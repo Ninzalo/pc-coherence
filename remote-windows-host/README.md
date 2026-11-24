@@ -11,7 +11,7 @@ This tree is the **canonical owner of the protocol contract**
 
 > Layout note: the plan calls for two Git repositories. Per explicit owner
 > instruction this project lives in one repository
-> (`Ninzalo/pc-coherense`) containing both product trees as independent
+> (`Ninzalo/pc-coherence`) containing both product trees as independent
 > subtrees — see `docs/decisions/ADR-0008-single-repo-layout.md`. All
 > other plan rules apply unchanged.
 
