@@ -219,6 +219,12 @@ int AppController::runGui(const Options& opts) {
               {{"code", std::to_string(rc)},
                {"detail", tray.lastError().empty() ? "n/a" : tray.lastError()},
                {"window", tray.windowKind()}});
+  } else if (!tray.iconOk()) {
+    // Degraded mode: no notification area in this session (e.g. a
+    // non-interactive session). The host served without a tray icon.
+    log.write(LogLevel::Error, "tray.icon_failed",
+              {{"detail", tray.lastError()},
+               {"window", tray.windowKind()}});
   } else {
     log.write(LogLevel::Info, "tray.exit",
               {{"window", tray.windowKind()}});

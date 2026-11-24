@@ -162,11 +162,19 @@ int TrayController::run() {
                                                    // product icon: packaging
   HMODULE mod = GetModuleHandleW(nullptr);
   LoadStringW(mod, IDS_TRAY_TOOLTIP, nid.szTip, ARRAYSIZE(nid.szTip));
+  bool icon_added = true;
   if (!Shell_NotifyIconW(NIM_ADD, &nid)) {
+    // Degraded mode: the shell has no notification area (e.g. a
+    // non-interactive session with no tray). The host keeps running
+    // and serving — the tray is the UI, not the product core — but
+    // the menu (status / pairing code / exit) is unavailable in this
+    // session. Logged by the app layer via iconOk()/lastError().
     const DWORD e = GetLastError();
-    err_ = "Shell_NotifyIconW(NIM_ADD) failed: " + std::to_string(e);
+    err_ = "Shell_NotifyIconW(NIM_ADD) failed: " + std::to_string(e)
+           + " (degraded, continuing without tray icon)";
     std::fprintf(stderr, "%s\n", err_.c_str());
-    return 3;
+    icon_added = false;
+    iconOk_ = false;
   }
 
   MSG msg{};
@@ -186,11 +194,13 @@ int TrayController::run() {
     DispatchMessageW(&msg);
   }
 
-  NOTIFYICONDATAW remove{};
-  remove.cbSize = sizeof(remove);
-  remove.hWnd = hwnd_;
-  remove.uID = kTrayId;
-  Shell_NotifyIconW(NIM_DELETE, &remove);
+  if (icon_added) {
+    NOTIFYICONDATAW remove{};
+    remove.cbSize = sizeof(remove);
+    remove.hWnd = hwnd_;
+    remove.uID = kTrayId;
+    Shell_NotifyIconW(NIM_DELETE, &remove);
+  }
   return loop_rc;
 }
 

@@ -36,10 +36,16 @@ class TrayController {
   ~TrayController();
 
   // Registers the tray icon and runs the message loop.
-  // Return values: 0 = normal exit via the tray menu (WM_QUIT),
-  // 2 = class/window creation failed, 3 = Shell_NotifyIconW(NIM_ADD)
+  // Return values: 0 = normal exit via the tray menu (WM_QUIT) —
+  // includes degraded mode where NIM_ADD failed (no notification
+  // area in this session; iconOk() is false and lastError() carries
+  // the detail; the host kept serving) — 2 = class/window creation
   // failed, 4 = GetMessageW error. lastError() carries the detail.
   int run();
+
+  // False when the tray icon could not be registered (degraded mode;
+  // the message loop still ran and the host kept serving).
+  bool iconOk() const { return iconOk_; }
 
   // Diagnostic detail for the last run() failure (empty on success).
   const std::string& lastError() const { return err_; }
@@ -63,6 +69,8 @@ class TrayController {
   std::function<TrayStatus()> statusFn_;
   std::function<std::string()> pairingCodeFn_;
   HWND hwnd_ = nullptr;
+  // False when the tray icon could not be registered (degraded mode).
+  bool iconOk_ = true;
   // True when the hidden top-level fallback window is in use instead
   // of the message-only window (see run()).
   bool window_fallback_ = false;
