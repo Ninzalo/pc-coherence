@@ -99,11 +99,13 @@ does not compile on macOS — Windows-only, verified via the runner below.
 
 Windows runner (DESKTOP-PC):
 
-| Item | Evidence (2026-11-24) |
+| Item | Evidence (2026-11-24, SHA `870aec1`) |
 |---|---|
 | Runner health | `windows-runner.sh status` → `RWH status=ok`, `RWH host=DESKTOP-PC`, `RWH cmake=cmake version 4.5.1`, `RWH ninja=1.13.2`, `RWH git=git version 2.54.0.windows.1` (exit 0) |
-| `windows-runner.sh unit-tests <sha>` | **NOT RUN** — the runner's `prepare` fetches `origin main` only, and this commit lives on the unpushed branch `agent/H-NET/RW-H004` (pushing to origin is reserved for the orchestrator per task rules); no allow-listed action fetches non-main refs. Orchestrator: after pushing, run `prepare <sha>`, `unit-tests <sha>` (expect `100% tests passed out of 101`, `RWH ctest_exit=0`, `RWH status=tests_ok`) and `selftest <sha>` (expect `RWH status=selftest_ok` with the extended pairing report) |
-| `windows-runner.sh selftest <sha>` | **NOT RUN** (same reason; the `rwh-host` target itself compiles on this tree's Windows build only via the runner — NOT RUN on macOS, never claimed) |
+| `prepare` | `RWH status=prepared`, `RWH sha=870aec1dae23da5bf18869eee05120c860c925c7` (fetch + checkout of `origin/main` verified) |
+| `windows-runner.sh unit-tests <sha>` | `RWH sha=870aec1...`, **`100% tests passed out of 101`** (MSVC 14.51.36231 / SDK 10.0.26100, RelWithDebInfo, Ninja), `RWH ctest_exit=0`, `RWH status=tests_ok` |
+| `windows-runner.sh selftest <sha>` | `rwh-host.exe --selftest` → `{"selftest":true,"passed":true,"stage":"","port":47987,"reply_kind":"app_catalog","envelopes":3,"pairing":"accepted","reply_kinds":"hello;pairing_challenge;pairing_result;app_catalog","error":""}`, `RWH selftest_exit=0`, `RWH status=selftest_ok` |
+| MSVC link fix found by the runner | `rwh-host` was missing `app/SessionAuth.cpp` in its source list (LNK2019 for `SignalingSessionHandler` ctor + `PairingHost::currentCode`); one-line CMake fix `870aec1`; macOS 101/101 unaffected (rwh-host is Win32-only) |
 
 Protocol gaps found (CONTRACT follow-up requested, see report):
 `input_event` has no result kind and `app_catalog` carries no
@@ -148,8 +150,8 @@ uses; the doc should be aligned.
 3. ~~H-FOUND: `app/` shell~~ — DONE 2026-11-24 at `d3c780e` (evidence
    above, selftest_ok + 83/83).
 4. ~~H-NET: pairing state machine + session authorization over the
-   signaling channel (RW-H-004)~~ — DONE 2026-11-24 (evidence above;
-   101/101 macOS; runner NOT RUN — branch not pushed, see section).
+   signaling channel (RW-H-004)~~ — DONE 2026-11-24 at `870aec1`
+   (101/101 macOS + Windows runner unit-tests/selftest, evidence above).
 5. C-CONNECTION: macOS Client connection/pairing counterpart (pairs
    against the Host handshake verified in RW-H-004); per orchestrator,
    H-MEDIA (capture/video) is the parallel Host track.
