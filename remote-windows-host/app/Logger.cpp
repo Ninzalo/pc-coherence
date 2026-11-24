@@ -5,9 +5,8 @@
 #include <ctime>
 
 #ifdef _WIN32
+#include "app/Win32Env.hpp"  // pin API surface BEFORE any SDK header
 #include <shlobj.h>
-
-#include "app/Win32Env.hpp"
 #endif
 
 namespace remotewindows::app {

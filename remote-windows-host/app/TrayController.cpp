@@ -78,7 +78,7 @@ void TrayController::showStatus() {
   LoadStringW(mod, IDS_STATUS_FORMAT, format, ARRAYSIZE(format));
   TrayStatus s = statusFn_();
   wchar_t text[192];
-  wsprintfW(text, ARRAYSIZE(text), format, (UINT)s.port, (UINT)s.connections);
+  wsprintfW(text, format, (UINT)s.port, (UINT)s.connections);
   MessageBoxW(hwnd_, text, L"Remote Windows Host", MB_OK | MB_ICON_INFORMATION);
 }
 

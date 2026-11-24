@@ -8,7 +8,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
-#include <windows.h>
+
+#include "app/Win32Env.hpp"  // wide-only Win32 environment (do not
+                             // include <windows.h> directly here)
 
 namespace remotewindows::app {
 
