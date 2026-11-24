@@ -3,14 +3,12 @@
 
 // Win32 notification-area (tray) presence for the Windows Host (H-FOUND).
 // All user-facing strings come from the en-US.rc string table only
-// (plan rule 3 / FR-14).
+// (plan rule 3 / FR-14). Windows-only: <windows.h> is a hard dependency.
 
 #include <cstddef>
 #include <cstdint>
 #include <functional>
-
-struct HWND__;  // opaque Win32 handle (kept out of the header)
-using LRESULT = long;  // Win32 LRESULT without including <windows.h>
+#include <windows.h>
 
 namespace remotewindows::app {
 
@@ -29,14 +27,13 @@ class TrayController {
   int run();
 
  private:
-  // Win32 message dispatch (static, routed through GWLP_USERDATA).
-  static LRESULT WINAPI wndProc(HWND__* hwnd, unsigned int msg,
-                                uintptr_t wParam, intptr_t lParam);
-  void showMenu(HWND__* hwnd);
+  static LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wParam,
+                                  LPARAM lParam);
+  void showMenu(HWND hwnd);
   void showStatus();
 
   std::function<TrayStatus()> statusFn_;
-  HWND__* hwnd_ = nullptr;
+  HWND hwnd_ = nullptr;
 };
 
 }  // namespace remotewindows::app

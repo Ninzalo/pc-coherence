@@ -1,7 +1,6 @@
 #include "resource.h"
 
-LANGUAGES
-  0x09, 0x04  // English (United States) — MVP ships English only (FR-14)
+LANGUAGE 0x09, 0x04  // English (United States) - MVP ships English only (FR-14)
 
 STRINGTABLE
 BEGIN

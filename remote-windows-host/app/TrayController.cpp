@@ -15,9 +15,9 @@ constexpr wchar_t kWindowClass[] = L"RWHTrayWindow";
 constexpr UINT kTrayId = 1;
 constexpr UINT kMenuStatus = 1;
 constexpr UINT kMenuExit = 2;
-constexpr unsigned int kTrayCallback = WM_APP + 1;
+constexpr UINT kTrayCallback = WM_APP + 1;
 
-TrayController* selfOf(HWND* hwnd) {
+TrayController* selfOf(HWND hwnd) {
   return reinterpret_cast<TrayController*>(
       GetWindowLongPtrW(hwnd, GWLP_USERDATA));
 }
@@ -28,9 +28,8 @@ TrayController::TrayController(std::function<TrayStatus()> statusFn)
 
 TrayController::~TrayController() = default;
 
-LRESULT WINAPI TrayController::wndProc(HWND* hwnd, unsigned int msg,
-                                       uintptr_t wParam,
-                                       intptr_t lParam) {
+LRESULT CALLBACK TrayController::wndProc(HWND hwnd, UINT msg, WPARAM wParam,
+                                         LPARAM lParam) {
   TrayController* self = selfOf(hwnd);
   switch (msg) {
     case WM_NCCREATE: {
@@ -55,7 +54,7 @@ LRESULT WINAPI TrayController::wndProc(HWND* hwnd, unsigned int msg,
   return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
-void TrayController::showMenu(HWND* hwnd) {
+void TrayController::showMenu(HWND hwnd) {
   HMODULE mod = GetModuleHandleW(nullptr);
   HMENU menu = CreatePopupMenu();
   if (!menu) return;
