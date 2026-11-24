@@ -94,13 +94,22 @@ int AppController::runGui(const Options& opts) {
         // is never logged or persisted (AGENTS rule 9).
         return handler.rotateOrCurrentCode();
       });
+#ifdef _WIN32
+  // Console-subsystem build: a console window exists in GUI mode.
+  // Closing it (CTRL_CLOSE) or Ctrl+C must NOT stop the host — the
+  // tray is the UI and the server must keep running (diagnosis
+  // 2026-11-24: user-visible "host stops after 1 s" failure mode).
+  ::SetConsoleCtrlHandler([](DWORD) { return TRUE; }, TRUE);
+#endif
   int rc = tray.run();
   if (rc != 0) {
     log.write(LogLevel::Error, "tray.failed",
               {{"code", std::to_string(rc)},
-               {"detail", tray.lastError().empty() ? "n/a" : tray.lastError()}});
+               {"detail", tray.lastError().empty() ? "n/a" : tray.lastError()},
+               {"window", tray.windowKind()}});
   } else {
-    log.write(LogLevel::Info, "tray.exit", {});
+    log.write(LogLevel::Info, "tray.exit",
+              {{"window", tray.windowKind()}});
   }
 
   server.stop();

@@ -121,14 +121,30 @@ int TrayController::run() {
     return 2;
   }
 
+  HWND module_h = GetModuleHandleW(nullptr);
   hwnd_ = CreateWindowExW(0, kWindowClass, L"RWH", 0, 0, 0, 0, 0,
-                          HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr),
-                          this);
+                          HWND_MESSAGE, nullptr, module_h, this);
   if (!hwnd_) {
-    const DWORD e = GetLastError();
-    err_ = "CreateWindowExW failed: " + std::to_string(e);
-    std::fprintf(stderr, "%s\n", err_.c_str());
-    return 2;
+    const DWORD e_msgonly = GetLastError();
+    // Fallback: a hidden normal top-level window. A message-only
+    // window is a convenience, not a requirement — a hidden
+    // top-level window is a fully valid notification-area callback
+    // target (diagnosis 2026-11-24: msg-only creation failed with
+    // GetLastError()==0 in both an interactive desktop session and
+    // a non-interactive session; the hidden window is the fix).
+    hwnd_ = CreateWindowExW(0, kWindowClass, L"RWH", 0, -32000, -32000,
+                            1, 1, nullptr, nullptr, module_h, this);
+    if (hwnd_) {
+      window_fallback_ = true;
+    } else {
+      const DWORD e_normal = GetLastError();
+      err_ = "CreateWindowExW failed: msgonly=" + std::to_string(e_msgonly)
+             + " normal=" + std::to_string(e_normal)
+             + " session=" + std::to_string(ProcessSessionId())
+             + " module=" + (module_h != nullptr ? "ok" : "null");
+      std::fprintf(stderr, "%s\n", err_.c_str());
+      return 2;
+    }
   }
 
   NOTIFYICONDATAW nid{};

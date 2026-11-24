@@ -44,6 +44,11 @@ class TrayController {
   // Diagnostic detail for the last run() failure (empty on success).
   const std::string& lastError() const { return err_; }
 
+  // "msgonly" (HWND_MESSAGE window) or "hidden" (top-level fallback).
+  const char* windowKind() const {
+    return window_fallback_ ? "hidden" : "msgonly";
+  }
+
  private:
   static LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wParam,
                                   LPARAM lParam);
@@ -54,6 +59,9 @@ class TrayController {
   std::function<TrayStatus()> statusFn_;
   std::function<std::string()> pairingCodeFn_;
   HWND hwnd_ = nullptr;
+  // True when the hidden top-level fallback window is in use instead
+  // of the message-only window (see run()).
+  bool window_fallback_ = false;
   // Diagnostic detail for the last run() failure (empty on success);
   // read via lastError() so the app layer can log it (H-FOUND,
   // tray-exit diagnosis 2026-11-24).
