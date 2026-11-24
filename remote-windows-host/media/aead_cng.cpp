@@ -63,8 +63,7 @@ void diag(const char* what, NTSTATUS st) {
 }
 
 // BCryptSetProperty takes the property value as PUCHAR even when the
-// property is a wide string: reinterpret the L"..." literal bytes,
-// keeping the terminating null (size passed by the caller).
+// property is a wide string: reinterpret the L"..." literal bytes.
 inline PUCHAR propertyBytes(const wchar_t* w) {
   return reinterpret_cast<PUCHAR>(const_cast<wchar_t*>(w));
 }
@@ -79,7 +78,12 @@ BCRYPT_ALG_HANDLE openAesGcmAlgorithm() {
   }
   const NTSTATUS st = BCryptSetProperty(
       alg, BCRYPT_CHAINING_MODE, propertyBytes(BCRYPT_CHAIN_MODE_GCM),
-      static_cast<ULONG>(sizeof(BCRYPT_CHAIN_MODE_GCM)), 0);
+      // Size WITHOUT the terminating null, exactly as the MSDN CNG
+      // samples compute it (wcslen * sizeof(WCHAR)). A size that
+      // includes the NUL is what made BCryptEncrypt fail with
+      // STATUS_INVALID_PARAMETER (C000000D) on SDK 26100.
+      static_cast<ULONG>(wcslen(BCRYPT_CHAIN_MODE_GCM) * sizeof(wchar_t)),
+      0);
   diag("SetProperty_GCM", st);
   if (st != 0) {
     BCryptCloseAlgorithmProvider(alg, 0);
@@ -116,20 +120,35 @@ bool AeadCng::seal(const uint8_t key[32], const uint8_t nonce[12],
   bool ok = false;
   const BCRYPT_KEY_HANDLE hkey = loadKey(alg, key);
   if (hkey != nullptr) {
-    // No AAD (pPaddingInfo = NULL); the GCM tag is written at the END of
-    // the output buffer by BCryptEncrypt.
+    // GCM flow (CNG docs, "Authenticated cipher mode info"): the nonce
+    // MUST be carried in BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO (a nonce
+    // passed only via pbIV makes BCryptEncrypt return
+    // STATUS_INVALID_PARAMETER), and the authentication tag is written
+    // to a SEPARATE buffer pointed to by info.pbTag — the function
+    // output buffer receives only the ciphertext.
+    //
+    // Wire layout is ciphertext||tag: hand BCryptEncrypt the first
+    // in_len bytes of out_ct_tag as the ciphertext output and the last
+    // 16 bytes as the tag buffer, so the wire format lands in place.
+    // No AAD (pbAuthData=NULL), no chaining (dwFlags=0, pbMacContext
+    // =NULL — both zeroed by BCRYPT_INIT_AUTH_MODE_INFO).
+    BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO info;
+    BCRYPT_INIT_AUTH_MODE_INFO(&info);
+    info.pbNonce = const_cast<uint8_t*>(nonce);
+    info.cbNonce = static_cast<ULONG>(kMediaNonceBytes);
+    info.pbTag = out_ct_tag + in_len;
+    info.cbTag = static_cast<ULONG>(kMediaGcmTagBytes);
+
     ULONG cb_result = 0;
     const NTSTATUS st = BCryptEncrypt(
         hkey, reinterpret_cast<PUCHAR>(const_cast<uint8_t*>(in)),
-        static_cast<ULONG>(in_len), nullptr,
-        reinterpret_cast<PUCHAR>(const_cast<uint8_t*>(nonce)),
-        static_cast<ULONG>(kMediaNonceBytes),
+        static_cast<ULONG>(in_len), &info, nullptr, 0,
         reinterpret_cast<PUCHAR>(out_ct_tag),
-        static_cast<ULONG>(out_capacity), &cb_result, 0);
+        static_cast<ULONG>(in_len), &cb_result, 0);
     diag("Encrypt", st);
     BCryptDestroyKey(hkey);
-    if (st == 0 && cb_result == static_cast<ULONG>(out_capacity)) {
-      out_len = cb_result;
+    if (st == 0 && cb_result == static_cast<ULONG>(in_len)) {
+      out_len = out_capacity;  // ciphertext + tag, both in place
       ok = true;
     }
   }
@@ -150,16 +169,23 @@ bool AeadCng::open(const uint8_t key[32], const uint8_t nonce[12],
   bool ok = false;
   const BCRYPT_KEY_HANDLE hkey = loadKey(alg, key);
   if (hkey != nullptr) {
-    // Decrypt into a local buffer first so the caller's out buffer is
-    // written only on full success (never partially written on an
-    // authentication failure).
+    // GCM flow: the tag to be checked comes from info.pbTag (last 16
+    // bytes of the input); BCryptDecrypt's input buffer is the
+    // ciphertext part only. Decrypt into a local buffer first so the
+    // caller's out buffer is written only on full success (never
+    // partially written on an authentication failure).
+    BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO info;
+    BCRYPT_INIT_AUTH_MODE_INFO(&info);
+    info.pbNonce = const_cast<uint8_t*>(nonce);
+    info.cbNonce = static_cast<ULONG>(kMediaNonceBytes);
+    info.pbTag = const_cast<uint8_t*>(in) + pt_len;
+    info.cbTag = static_cast<ULONG>(kMediaGcmTagBytes);
+
     std::vector<uint8_t> scratch(pt_len);
     ULONG cb_result = 0;
     const NTSTATUS st = BCryptDecrypt(
         hkey, reinterpret_cast<PUCHAR>(const_cast<uint8_t*>(in)),
-        static_cast<ULONG>(in_len), nullptr,
-        reinterpret_cast<PUCHAR>(const_cast<uint8_t*>(nonce)),
-        static_cast<ULONG>(kMediaNonceBytes),
+        static_cast<ULONG>(pt_len), &info, nullptr, 0,
         reinterpret_cast<PUCHAR>(scratch.data()),
         static_cast<ULONG>(pt_len), &cb_result, 0);
     diag("Decrypt", st);
