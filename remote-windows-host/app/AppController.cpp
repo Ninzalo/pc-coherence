@@ -146,6 +146,28 @@ LRESULT CALLBACK probeDeferredSet(HWND h, UINT m, WPARAM w, LPARAM l) {
   }
   return DefWindowProcW(h, m, w, l);
 }
+
+// q: candidate fix — SetWindowLongPtrW(GWLP_USERDATA) in WM_NCCREATE
+//    AND return DefWindowProcW's result (the documented contract).
+LRESULT CALLBACK probeFixedSetLong(HWND h, UINT m, WPARAM w, LPARAM l) {
+  if (m == WM_NCCREATE) {
+    auto* cs = reinterpret_cast<CREATESTRUCTW*>(l);
+    SetWindowLongPtrW(h, GWLP_USERDATA,
+                      reinterpret_cast<LONG_PTR>(cs->lpCreateParams));
+    return DefWindowProcW(h, m, w, l);
+  }
+  return DefWindowProcW(h, m, w, l);
+}
+
+// r: candidate fix — SetPropW in WM_NCCREATE + DefWindowProcW result.
+LRESULT CALLBACK probeFixedSetProp(HWND h, UINT m, WPARAM w, LPARAM l) {
+  if (m == WM_NCCREATE) {
+    auto* cs = reinterpret_cast<CREATESTRUCTW*>(l);
+    SetPropW(h, L"RWHProbeSelf", cs->lpCreateParams);
+    return DefWindowProcW(h, m, w, l);
+  }
+  return DefWindowProcW(h, m, w, l);
+}
 #endif
 
 }  // namespace
@@ -253,7 +275,7 @@ int AppController::runProbeTray(const Options& opts) {
     LRESULT (*proc)(HWND, UINT, WPARAM, LPARAM);
     void* lp_param;
   };
-  const ProbeCase cases[11] = {
+  const ProbeCase cases[13] = {
       // e: exact TrayController replication (name+proc+param+title)
       {"probe.e_exact", L"RWHTrayWindow", L"RWH", &TrayController::wndProc,
        &param},
@@ -286,6 +308,12 @@ int AppController::runProbeTray(const Options& opts) {
        nullptr},
       // p: DefWindowProcW + title L"RWH" -> isolates the title
       {"probe.p_title", L"RWHTrayWindowP", L"RWH", DefWindowProcW, nullptr},
+      // q: candidate fix — SetWindowLongPtrW + DefWindowProcW result
+      {"probe.q_fixedsetlong", L"RWHTrayWindowQ", L"RWH", &probeFixedSetLong,
+       &param},
+      // r: candidate fix — SetPropW + DefWindowProcW result
+      {"probe.r_fixedsetprop", L"RWHTrayWindowR", L"RWH", &probeFixedSetProp,
+       &param},
   };
   for (const ProbeCase& c : cases) {
     WNDCLASSEXW wc{};
