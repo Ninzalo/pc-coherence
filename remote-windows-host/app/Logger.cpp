@@ -5,8 +5,7 @@
 #include <ctime>
 
 #ifdef _WIN32
-#include "app/Win32Env.hpp"  // pin API surface BEFORE any SDK header
-#include <shlobj.h>
+#include "app/Win32Env.hpp"
 #endif
 
 namespace remotewindows::app {
@@ -80,15 +79,17 @@ void Logger::write(LogLevel level, const std::string& event,
 
 std::string Logger::defaultPath(std::string& err) {
 #ifdef _WIN32
-  wchar_t* buf = nullptr;
-  HRESULT hr = SHGetAllocatedString(CSIDL_LOCAL_APPDATA, &buf, nullptr);
-  if (FAILED(hr) || !buf) {
-    if (buf) CoTaskMemFree(buf);
+  // GetKnownFolderPath (the documented replacement for SHGetAllocatedString,
+  // which this SDK has removed) requires an initialized COM apartment; the
+  // LOCALAPPDATA environment variable is always set in the interactive user
+  // session and keeps the logger COM-free.
+  wchar_t buf[MAX_PATH] = {0};
+  DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", buf, MAX_PATH);
+  if (n == 0 || n >= MAX_PATH) {
     err = "cannot resolve %LOCALAPPDATA%";
     return {};
   }
   std::wstring w(buf);
-  CoTaskMemFree(buf);
   std::wstring full = w + L"\\RemoteWindows\\host.log";
   std::string out;
   out.reserve(full.size());
