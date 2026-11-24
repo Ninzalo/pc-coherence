@@ -3,6 +3,7 @@
 
 #include <chrono>
 #include <cstdio>
+#include <cstring>
 #include <optional>
 #include <string>
 #include <thread>
@@ -112,6 +113,35 @@ LRESULT CALLBACK probeStandardOnly(HWND h, UINT m, WPARAM w, LPARAM l) {
     auto* cs = reinterpret_cast<CREATESTRUCTW*>(l);
     SetWindowLongPtrW(h, GWLP_USERDATA,
                       reinterpret_cast<LONG_PTR>(cs->lpCreateParams));
+    return 0;
+  }
+  return DefWindowProcW(h, m, w, l);
+}
+
+// l: intercepts WM_NCCREATE but only forwards to DefWindowProcW
+//    (pure-interception test — no property writes).
+LRESULT CALLBACK probeNcCreateForward(HWND h, UINT m, WPARAM w, LPARAM l) {
+  if (m == WM_NCCREATE) return DefWindowProcW(h, m, w, l);
+  return DefWindowProcW(h, m, w, l);
+}
+
+// m: WM_NCCREATE via SetPropW (the documented SetProp/GetProp
+//    alternative to GWLP_USERDATA).
+LRESULT CALLBACK probeSetPropInNc(HWND h, UINT m, WPARAM w, LPARAM l) {
+  if (m == WM_NCCREATE) {
+    auto* cs = reinterpret_cast<CREATESTRUCTW*>(l);
+    SetPropW(h, L"RWHProbeSelf", cs->lpCreateParams);
+    return 0;
+  }
+  return DefWindowProcW(h, m, w, l);
+}
+
+// n: WM_NCCREATE forwarded; SetWindowLongPtrW(GWLP_USERDATA) done
+//    later, after creation, in response to a custom message.
+LRESULT CALLBACK probeDeferredSet(HWND h, UINT m, WPARAM w, LPARAM l) {
+  if (m == WM_NCCREATE) return DefWindowProcW(h, m, w, l);
+  if (m == WM_APP + 42) {
+    SetWindowLongPtrW(h, GWLP_USERDATA, 0x1234);
     return 0;
   }
   return DefWindowProcW(h, m, w, l);
@@ -245,6 +275,17 @@ int AppController::runProbeTray(const Options& opts) {
       // k: standard pattern — set USERDATA, never read during creation
       {"probe.k_standard", L"RWHTrayWindowK", L"RWH", &probeStandardOnly,
        nullptr},
+      // l: intercepts WM_NCCREATE, only forwards (pure interception)
+      {"probe.l_ncforward", L"RWHTrayWindowL", L"RWH", &probeNcCreateForward,
+       nullptr},
+      // m: WM_NCCREATE via SetPropW (alternative storage)
+      {"probe.m_setprop", L"RWHTrayWindowM", L"RWH", &probeSetPropInNc,
+       nullptr},
+      // n: WM_NCCREATE forwarded; SetWindowLongPtrW deferred post-creation
+      {"probe.n_deferred", L"RWHTrayWindowN", L"RWH", &probeDeferredSet,
+       nullptr},
+      // p: DefWindowProcW + title L"RWH" -> isolates the title
+      {"probe.p_title", L"RWHTrayWindowP", L"RWH", DefWindowProcW, nullptr},
   };
   for (const ProbeCase& c : cases) {
     WNDCLASSEXW wc{};
@@ -260,7 +301,21 @@ int AppController::runProbeTray(const Options& opts) {
                                HWND_MESSAGE, nullptr,
                                GetModuleHandleW(nullptr), c.lp_param);
       window = h ? "ok" : "null:" + std::to_string(GetLastError());
-      if (h) DestroyWindow(h);
+      if (h) {
+        // n: prove SetWindowLongPtrW(GWLP_USERDATA) works post-creation.
+        if (std::strcmp(c.label, "probe.n_deferred") == 0) {
+          PostMessageW(h, WM_APP + 42, 0, 0);
+          Sleep(50);
+          MSG m2{};
+          while (PeekMessageW(&m2, nullptr, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&m2);
+            DispatchMessageW(&m2);
+          }
+          const LONG_PTR v = GetWindowLongPtrW(h, GWLP_USERDATA);
+          window += " lateuserdata=" + std::to_string((unsigned long)v);
+        }
+        DestroyWindow(h);
+      }
     }
     log.write(LogLevel::Info, c.label,
               {{"window", window}, {"atom", std::to_string(atom)}});
