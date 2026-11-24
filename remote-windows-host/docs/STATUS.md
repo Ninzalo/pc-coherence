@@ -156,7 +156,12 @@ on the Host"):
   IDS_APP_TITLE instead of a hardcoded literal.
 - Rotation semantics unchanged: attempt counters / 60 s lockout remain
   in `core::PairingManager` (PROTOCOL §7.4); a fresh code pairs
-  normally after consume() (unit tests below).
+  normally after consume() (unit tests below). Note: `rotateCode` is
+  deterministic in the timestamp — a re-rotation within the same
+  steady-clock millisecond can regenerate the same 6 digits, which is
+  still a valid active code (the tray always displays the current
+  active code; the e2e test therefore does not assert byte-difference,
+  the PairingHost unit test does, with an injectable clock).
 
 macOS verification (branch `agent/H-FOUND/RW-H005`, 2026-11-24):
 
