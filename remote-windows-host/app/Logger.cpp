@@ -70,7 +70,14 @@ void Logger::write(LogLevel level, const std::string& event,
 
   {
     std::lock_guard<std::mutex> lk(mu_);
-    if (file_open_ && file_) std::fprintf(file_, "%s\n", line.c_str());
+    if (file_open_ && file_) {
+      std::fprintf(file_, "%s\n", line.c_str());
+      // Per-line flush: this is a daemon log — the host must not lose
+      // its last lines to stdio buffering on a crash or kill (the file
+      // is fully buffered when not on a console; observed 2026-11-24:
+      // a live GUI process held its host.start/tray lines for 10+ s).
+      std::fflush(file_);
+    }
   }
   // Mirror to stdout (the app is a console-subsystem binary; the build/test
   // runner captures this stream).
