@@ -67,6 +67,16 @@ target_link_libraries(rwh-signaling-probe PRIVATE rwh_network)
 # MSVC + Windows SDK. They are intentionally absent from the portable build;
 # see docs/STATUS.md (NOT RUN on macOS).
 
+# Win32 catalog adapters (RW-H-009): Start Menu IShellLinkW scan,
+# allow-listed ShellExecuteExW launcher, OpenProcess liveness probe.
+if(WIN32)
+  add_library(rwh_win32_catalog STATIC
+    win32/catalog/StartMenuSource.cpp
+    win32/catalog/Win32Launcher.cpp
+    win32/catalog/Win32ProcessProbe.cpp)
+  target_link_libraries(rwh_win32_catalog PUBLIC rwh_core ole32 shell32)
+endif()
+
 # Windows Host application shell (H-FOUND, plan section 4.1). Console
 # subsystem (selftest output must be capturable by the build/test runner);
 # Win32 + .rc resources, MSVC only.
@@ -78,7 +88,8 @@ if(WIN32)
     app/TrayController.cpp
     app/Logger.cpp
     app/resources/en-US.rc)
-  target_link_libraries(rwh-host PRIVATE rwh_network shell32 user32)
+  target_link_libraries(rwh-host PRIVATE
+    rwh_network rwh_win32_catalog shell32 user32)
 endif()
 
 enable_testing()

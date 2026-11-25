@@ -68,3 +68,17 @@ if(WIN32)
     RWH_TEST_VECTORS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../protocol/test-vectors")
   gtest_discover_tests(media_aead_cng_test DISCOVERY_TIMEOUT 30)
 endif()
+
+# Win32 catalog adapters tests (RW-H-009). Created ONLY on Windows:
+# win32/catalog/*.cpp (and these tests) must NOT compile on macOS.
+if(WIN32)
+  foreach(t startmenu_source_test win32_launcher_test)
+    add_executable(${t} ${t}.cpp)
+    target_link_libraries(${t} PRIVATE
+      rwh_win32_catalog
+      GTest::gtest
+      GTest::gtest_main
+      Threads::Threads)
+    gtest_discover_tests(${t} DISCOVERY_TIMEOUT 30)
+  endforeach()
+endif()
