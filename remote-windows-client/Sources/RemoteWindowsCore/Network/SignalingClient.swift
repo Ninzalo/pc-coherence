@@ -87,6 +87,13 @@ public final class SignalingClient {
     public var lastPairingResult: PairingResult? {
         get { lock.lock(); defer { lock.unlock() }; return _lastPairingResult }
     }
+    /// The derived §9.3 media session key (64 lowercase-hex chars),
+    /// available once pairing is accepted and `nil` otherwise. Needed by
+    /// the media channel handshake / per-stream key derivation
+    /// (RW-C-003). NEVER logged (content policy).
+    public var mediaSessionKey: String? {
+        get { lock.lock(); defer { lock.unlock() }; return _mediaSessionKey }
+    }
     /// Inbound envelopes that failed decode or semantic validation.
     public var droppedMessageCount: Int {
         get { lock.lock(); defer { lock.unlock() }; return _droppedCount }
@@ -112,6 +119,14 @@ public final class SignalingClient {
     /// Host `app_status` liveness (`running`/`closed`), heartbeat-piggybacked.
     /// Same delivery contract as `onCatalog`.
     public var onAppStatus: ((AppStatus) -> Void)?
+    /// Host `window_announce` (control kind, paired-only): a host window
+    /// is being streamed — start/refresh its media stream (RW-C-003).
+    /// Same delivery contract as `onCatalog`.
+    public var onWindowAnnounce: ((WindowAnnounce) -> Void)?
+    /// Host `window_remove` (control kind, paired-only): a host window
+    /// stopped streaming — discard its media stream (RW-C-003).
+    /// Same delivery contract as `onCatalog`.
+    public var onWindowRemove: ((WindowRemove) -> Void)?
 
     // MARK: Internals
 
@@ -128,6 +143,12 @@ public final class SignalingClient {
     private var _challenge: PairingChallenge?
     private var _catalog: AppCatalog?
     private var _lastPairingResult: PairingResult?
+    /// The pairing code last presented by the user (kept only to derive
+    /// the §9.3 session key on acceptance; never logged).
+    private var _pairingCode: String?
+    /// Derived §9.3 session key (hex) — set on pairing acceptance,
+    /// cleared on disconnect/reset.
+    private var _mediaSessionKey: String?
     private var _droppedCount = 0
     private var _sentHeartbeats = 0
     private var _timer: SignalingTimer?
@@ -200,6 +221,9 @@ public final class SignalingClient {
                     hostName: challenge.hostName,
                     challengeNonce: challenge.challengeNonce)))
             sendEnvelope(envelope)
+            // Retain the just-presented code: the §9.3 session key is
+            // derived from it (+ host_name) once the host accepts.
+            _pairingCode = code
             return true
         }
     }
@@ -295,6 +319,14 @@ public final class SignalingClient {
             _lastPairingResult = result
             if result.accepted {
                 setState(.paired)
+                // §9.3: derive the media session key from the just-
+                // presented code + the challenge host name (both held).
+                // Retained read-only for the media channel; never
+                // logged.
+                if let code = _pairingCode, let hostName = _hostName {
+                    _mediaSessionKey = MediaKeys.sessionKey(code: code,
+                                                            hostName: hostName)
+                }
                 // Exactly one catalog request per pairing (RW-C-001).
                 sendEnvelope(makeAppCatalogRequest(forceRescan: false))
             } else if result.errorCode == "locked" {
@@ -329,6 +361,20 @@ public final class SignalingClient {
             if _state == .paired {
                 pendingCallbacks.append { [weak self] in
                     self?.onAppStatus?(status)
+                }
+            }
+        case .windowAnnounce(let announce):
+            // Media stream lifecycle (RW-C-003): paired-only, like the
+            // other host-driven kinds.
+            if _state == .paired {
+                pendingCallbacks.append { [weak self] in
+                    self?.onWindowAnnounce?(announce)
+                }
+            }
+        case .windowRemove(let remove):
+            if _state == .paired {
+                pendingCallbacks.append { [weak self] in
+                    self?.onWindowRemove?(remove)
                 }
             }
         case .heartbeat:
@@ -407,6 +453,8 @@ public final class SignalingClient {
         _challenge = nil
         _catalog = nil
         _lastPairingResult = nil
+        _pairingCode = nil
+        _mediaSessionKey = nil
         _lastActivityMs = nil
         _droppedCount = 0
         _sentHeartbeats = 0

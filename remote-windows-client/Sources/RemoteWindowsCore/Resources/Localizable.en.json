@@ -32,5 +32,13 @@
   "catalog.unavailable": "Unavailable",
   "catalog.column.name": "Name",
   "catalog.column.status": "Status",
-  "catalog.launchBlocked": "Launch is available only while paired with the Windows Host"
+  "catalog.launchBlocked": "Launch is available only while paired with the Windows Host",
+  "video.window.fallbackTitle": "Remote Window",
+  "video.channel.label": "Video channel",
+  "video.channel.idle": "Available after pairing",
+  "video.channel.connecting": "Connecting…",
+  "video.channel.open": "Open",
+  "video.channel.rejected": "Rejected by the Windows Host",
+  "video.channel.failed": "Failed: %@",
+  "video.channel.closed": "Closed"
 }

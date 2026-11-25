@@ -35,6 +35,15 @@ final class AppController: NSObject, NSWindowDelegate,
     private var catalogLaunchRow: NSStackView!
     private var launchButton: NSButton!
 
+    // Media channel (RW-C-003, role C-PERF): the §9 media connection
+    // (started on pairing), per-window stream state, and the decode/
+    // render pipeline. Video windows are real NSWindows owned by the
+    // pipeline (one per host window_id).
+    private let pipeline = VideoPipeline()
+    private var streamState: MediaStreamState?
+    private var mediaChannel: MediaChannel?
+    private var mediaStatusLabel: NSTextField!
+
     private static let catalogNameColumnID = NSUserInterfaceItemIdentifier("catalog.name")
     private static let catalogStatusColumnID = NSUserInterfaceItemIdentifier("catalog.status")
 
@@ -67,6 +76,16 @@ final class AppController: NSObject, NSWindowDelegate,
         wiredClient.onAppStatus = { [weak self] status in
             DispatchQueue.main.async {
                 self?.handleAppStatus(status)
+            }
+        }
+        wiredClient.onWindowAnnounce = { [weak self] announce in
+            DispatchQueue.main.async {
+                self?.handleWindowAnnounce(announce)
+            }
+        }
+        wiredClient.onWindowRemove = { [weak self] remove in
+            DispatchQueue.main.async {
+                self?.handleWindowRemove(remove)
             }
         }
     }
@@ -133,10 +152,13 @@ final class AppController: NSObject, NSWindowDelegate,
         stateLabel = makeLabel("")
         hostNameLabel = makeLabel("")
         hostNameLabel.textColor = .secondaryLabelColor
+        mediaStatusLabel = makeLabel("")
+        mediaStatusLabel.textColor = .secondaryLabelColor
 
         let catalogSection = makeCatalogSection()
 
-        [title, version, hostRow, codeRow, stateLabel, hostNameLabel, catalogSection]
+        [title, version, hostRow, codeRow, stateLabel, hostNameLabel,
+         mediaStatusLabel, catalogSection]
             .forEach { stack.addArrangedSubview($0) }
 
         let content = win.contentView!
@@ -306,6 +328,7 @@ final class AppController: NSObject, NSWindowDelegate,
         pairingCodeField.isEnabled = codeEnabled
         submitCodeButton.isEnabled = codeEnabled
         hostAddressField.isEnabled = state == .disconnected
+        syncMediaChannel()
         refreshCatalogUI()
     }
 
@@ -451,6 +474,122 @@ final class AppController: NSObject, NSWindowDelegate,
         guard (notification.object as? NSTextField) === searchField else { return }
         model.searchText = searchField.stringValue
         refreshTableRows()
+    }
+
+    // MARK: Media channel (RW-C-003)
+
+    /// Start the §9 media channel on pairing (same host as signaling,
+    /// TCP 47988), tear it down on disconnect/reject. The handshake
+    /// proves the §9.3 session key without transmitting it; the session
+    /// key itself never leaves these objects and is never logged
+    /// (content policy).
+    private func syncMediaChannel() {
+        let paired = client.state == .paired
+        if paired {
+            if mediaChannel == nil {
+                startMediaChannel()
+            }
+        } else {
+            stopMediaChannel()
+        }
+        refreshMediaLabel()
+    }
+
+    private func startMediaChannel() {
+        guard let sessionKeyHex = client.mediaSessionKey,
+              let rawSessionKey = try? MediaKeys.rawSessionKey(fromHex: sessionKeyHex)
+        else {
+            return
+        }
+        let state = MediaStreamState(sessionKeyHex: sessionKeyHex)
+        let channel = MediaChannel(host: preferences.hostAddress,
+                                   sessionKey: rawSessionKey,
+                                   state: state)
+        channel.onFrame = { [weak self] frame in
+            // Arrives on the channel's queue — hop to the main thread
+            // (decode/render are main-thread UI work).
+            DispatchQueue.main.async {
+                self?.pipeline.feed(windowID: frame.windowID,
+                                    payload: frame.payload,
+                                    isKeyframe: frame.isKeyframe,
+                                    frameSeq: frame.frameSeq)
+            }
+        }
+        channel.onClosed = { [weak self] reason in
+            DispatchQueue.main.async {
+                guard let self, self.mediaChannel === channel else { return }
+                if reason != nil {
+                    // §9.6 failure: tear down channel + streams +
+                    // windows; the signaling session is unaffected.
+                    self.mediaChannel = nil
+                    self.streamState = nil
+                    self.pipeline.removeAll()
+                }
+                self.refreshMediaLabel()
+            }
+        }
+        streamState = state
+        mediaChannel = channel
+        channel.connect()
+    }
+
+    private func stopMediaChannel() {
+        mediaChannel?.close()
+        mediaChannel = nil
+        streamState = nil
+        pipeline.removeAll()
+    }
+
+    /// `window_announce` (control kind): register the stream's cipher
+    /// state and open the video window (title = the announced title,
+    /// rendered as host data — only the empty fallback is localized).
+    private func handleWindowAnnounce(_ announce: WindowAnnounce) {
+        guard client.state == .paired, streamState != nil else { return }
+        do {
+            _ = try streamState?.register(windowID: announce.windowID)
+        } catch {
+            // Key derivation for this window failed (should not happen
+            // with a well-formed session key): surface it, skip the
+            // window — never a crash (FR-13).
+            mediaStatusLabel.stringValue =
+                String(format: L10n.t("video.channel.failed"),
+                       "stream registration")
+            return
+        }
+        let title = announce.title.isEmpty
+            ? L10n.t("video.window.fallbackTitle") : announce.title
+        let size = NSSize(width: Double(announce.widthPx),
+                          height: Double(announce.heightPx))
+        let surface = VideoSurfaceView(windowID: announce.windowID,
+                                       title: title, size: size)
+        pipeline.register(windowID: announce.windowID, surface: surface)
+    }
+
+    /// `window_remove` (control kind): discard the stream and close its
+    /// window (idempotent).
+    private func handleWindowRemove(_ remove: WindowRemove) {
+        streamState?.remove(windowID: remove.windowID)
+        pipeline.remove(windowID: remove.windowID)
+    }
+
+    private func refreshMediaLabel() {
+        let text: String
+        if client.state != .paired {
+            text = L10n.t("video.channel.idle")
+        } else if let channel = mediaChannel {
+            switch channel.state {
+            case .idle, .handshaking:
+                text = L10n.t("video.channel.connecting")
+            case .open:
+                text = L10n.t("video.channel.open")
+            case .closed:
+                text = L10n.t("video.channel.closed")
+            }
+        } else {
+            text = L10n.t("video.channel.closed")
+        }
+        mediaStatusLabel.stringValue =
+            L10n.t("video.channel.label") + ": " + text
     }
 
     // MARK: Window delegate
