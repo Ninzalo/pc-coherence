@@ -1,8 +1,12 @@
 # Windows Host — STATUS
 
-Last updated: 2026-11-25 (RW-H-008 portable catalog + launch services
-integrated — 143/143 macOS + Windows runner 146/146 unit-tests +
-selftest @ `d342bb3`; see "Implemented and verified" below).
+Last updated: 2026-11-25 (RW-H-009 Win32 catalog merged; MSVC build fixed through
+three runner rounds @ `991dae4`; first ctest run hung ~3.5 h on a UWP-alias
+notepad launch in session 0 — triaged, root-caused, test fixed, ctest
+per-test timeout + 25-min runner watchdog added; RW-H-009 Windows
+unit-tests/selftest PENDING at the new SHA. RW-H-008: 143/143 macOS +
+Windows runner 146/146 unit-tests + selftest @ `d342bb3`; see
+"Implemented and verified" below).
 
 ## Implemented and verified
 
@@ -59,6 +63,9 @@ replaces the session (new id/pid/timestamp), `makeUuid` format +
 | Portability fix found by the runner | POSIX `ssize_t` in the TCP layer is not declared by MSVC in C++ mode → `std::int64_t` (commit `978dc55`); clang still 83/83 |
 | CNG AES-256-GCM media backend (RW-H-007) | `unit-tests` @ `d5c1f044a89ca09122475f987059b536cda5f0b6` (2026-11-24): `100% tests passed out of 130`, `RWH ctest_exit=0`, `RWH status=tests_ok` — the 3 `MediaAeadCng` tests PASS on MSVC/SDK 26100: golden vectors (ciphertext+tag, all three), 1000-byte round-trip, tamper rejection. CNG API corrections found by the runner (SDK 10.0.26100): `BCryptCreateKey` absent → `BCryptGenerateSymmetricKey`; GCM nonce+tag via `BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO` (pPaddingInfo), NOT via pbIV (a pbIV-only nonce yields `STATUS_INVALID_PARAMETER`); `BCRYPT_INIT_AUTH_MODE_INFO(info)` takes the struct NAME (macro wraps param in `&`) |
 | Portable catalog/launch core (RW-H-008) | `prepare` @ `d342bb3258f4b13e1bba1226dbaea8da2cd95e95` (2026-11-25): `RWH status=prepared`; `unit-tests` @ same SHA: `100% tests passed out of 146`, `RWH ctest_exit=0`, `RWH status=tests_ok` (MSVC 14.51.36231 / SDK 10.0.26100, RelWithDebInfo, Ninja — 146 = 143 portable + 3 WIN32-only CNG); `selftest` @ same SHA: `{"selftest":true,"passed":true,"port":47987,"reply_kind":"app_catalog","envelopes":3,"pairing":"accepted","reply_kinds":"hello;pairing_challenge;pairing_result;app_catalog"}`, `RWH selftest_exit=0`, `RWH status=selftest_ok` (behavior unchanged — `AppController` does not wire `ControlServices` until RW-H-009) |
+| Win32 catalog MSVC build (RW-H-009) | First MSVC compile of `win32/catalog/` — three build rounds found real SDK/MSVC discrepancies (clang on macOS hid all of them; plan rule 2, all recorded in the code): 4-arg `IShellLinkW::GetPath` (the 3-arg form does not exist in this SDK), 1-arg `IShellLinkW::SetPath` C++ signature, `std::towlower` NOT in `std` under MSVC 14.51 even with `<cctype>`/`<cwchar>` (replaced by a deterministic ASCII fold), `SLGP_FILESYSTEM`/`SLGP_LONGPATH` not declared by SDK 10.0.26100 `<shlobj.h>` under this project's version pins (locally `#ifndef`-defined, Microsoft-documented values 0x10/0x20). Build at `991dae4` completed: all 6 link steps OK (`rwh_win32_catalog.lib`, `rwh-host.exe`, both WIN32 test exes) |
+| Runner hang triage + safety nets (2026-11-25) | First `unit-tests` ctest run at `991dae4` **hung ~3.5 h**: `win32_launcher_test` blocked in `ShellExecuteExW` — on Windows 11 24H2 `System32\notepad.exe` is an App Execution Alias stub for the PACKAGED Notepad, and app-model activation from the headless session-0 (sshd) context never completes (no process ever appeared; killed test PID 9736 + ctest PID 9148). Fixes committed: (a) the real-launch test now targets `%SystemRoot%\System32\cmd.exe` (plain Win32: starts, real PID + NOCLOSEPROCESS handle, idles on stdin, killable); (b) `ctest --timeout 300` per-test kill → clean failure instead of a block; (c) global 25-minute action watchdog in `rwh-runner.ps1` that kills a hung action (it then emits no `RWH status=..._ok` line → honest non-PASS; the `exit { block }` cleanup idiom is forbidden there — in this PS 5.1 context it terminates the script immediately, verified live). Runner re-uploaded SHA256-verified; `status` smoke-tested: `RWH watchdog_minutes=25`, `RWH status=ok` |
+| RW-H-009 unit tests / selftest at the new SHA | **PENDING — NOT RUN** (the fixes above are not yet executed on the runner; do not report as PASS). Re-run: `windows-runner.sh prepare <new-sha> && unit-tests && selftest` |
 
 ## Windows Host app shell (H-FOUND) — verified
 

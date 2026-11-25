@@ -2,10 +2,12 @@
 // RW-H-009: Win32 allow-listed launcher test (FR-02, plan rule 9).
 // Compiled and run ONLY on the Windows runner (MSVC + Windows SDK); on
 // macOS this test is NOT RUN. Includes one REAL launch: a temp .lnk under
-// a temp allowed root pointing at %SystemRoot%\System32\notepad.exe —
-// deliberate side effect on the dev runner: notepad opens briefly and the
-// test kills it BY PID (never taskkill /IM). The temp tree is cleaned up
-// after each test.
+// a temp allowed root pointing at %SystemRoot%\System32\cmd.exe (a plain
+// Win32 image — notepad is a UWP app alias and cannot be launched from
+// the headless session-0 runner context; see cmdPath) — deliberate
+// side effect on the dev runner: cmd opens briefly and the test kills
+// it BY PID (never taskkill /IM). The temp tree is cleaned up after
+// each test.
 
 #if !defined(_WIN32)
 #error "win32_launcher_test.cpp is a Windows-only test (ShellExecuteExW)"
@@ -130,11 +132,21 @@ class TempTree {
   std::wstring base_, user_, all_, outside_;
 };
 
-std::wstring notepadPath() {
+// A REAL launch target for the kill test: %SystemRoot%\System32\cmd.exe.
+// Target recorded per plan rule 2 (real behavior observed on the runner,
+// 2026-11-25): on Windows 11 24H2, System32\notepad.exe is an App
+// Execution Alias stub for the PACKAGED Notepad. ShellExecuteExW from
+// the headless session-0 (sshd) context hands the activation to the app
+// model, which never completes for a non-interactive session — the launch
+// blocked for hours with no process ever appearing and the whole runner
+// hung. cmd.exe is a plain Win32 image: it starts, gets a real PID +
+// NOCLOSEPROCESS handle, idles on stdin, and is killable — exactly the
+// lifecycle the probe/kill assertions exercise.
+std::wstring cmdPath() {
   wchar_t sr[MAX_PATH] = {};
   if (GetEnvironmentVariableW(L"SystemRoot", sr, MAX_PATH) == 0)
     return {};
-  const std::wstring p = std::wstring(sr) + L"\\System32\\notepad.exe";
+  const std::wstring p = std::wstring(sr) + L"\\System32\\cmd.exe";
   return GetFileAttributesW(p.c_str()) == INVALID_FILE_ATTRIBUTES ? std::wstring{}
                                                                   : p;
 }
@@ -157,11 +169,11 @@ TEST(Win32Launcher, OutsideAllowedRootIsUnauthorized) {
   ComInit com;
   ASSERT_TRUE(com.ok());
   TempTree tree;
-  const std::wstring notepad = notepadPath();
-  ASSERT_FALSE(notepad.empty()) << "notepad.exe missing on this runner";
+  const std::wstring cmd = cmdPath();
+  ASSERT_FALSE(cmd.empty()) << "cmd.exe missing on this runner";
 
   const std::wstring lnk = tree.outside_ + L"\\app.lnk";
-  ASSERT_TRUE(makeLnk(lnk, notepad, L"Outside"));
+  ASSERT_TRUE(makeLnk(lnk, cmd, L"Outside"));
 
   win32::Win32Launcher launcher({tree.user_});  // allow-list: temp user root only
   const core::LaunchOutcome out = launcher.launch(request(wideToUtf8(lnk)));
@@ -211,22 +223,24 @@ TEST(Win32Launcher, DeletedTargetIsLaunchFailed) {
   EXPECT_EQ(out.pid, 0u);
 }
 
-TEST(Win32Launcher, RealNotepadLaunchProbeAndKill) {
+TEST(Win32Launcher, RealProcessLaunchProbeAndKill) {
   // REAL launch on the dev runner: temp .lnk (under a temp allowed root)
-  // -> %SystemRoot%\System32\notepad.exe. Deliberate side effect: notepad
-  // opens briefly and the test kills it by PID.
+  // -> %SystemRoot%\System32\cmd.exe (see cmdPath() for why not notepad
+  // — UWP app-model activation from session 0 never completes).
+  // Deliberate side effect: cmd opens briefly (idle, reading stdin) and
+  // the test kills it by PID.
   ComInit com;
   ASSERT_TRUE(com.ok());
   TempTree tree;
 
-  // GetModuleFileNameW-style existence check BEFORE launching: if notepad
-  // is missing on the runner, FAIL LOUDLY (NOT RUN reporting is for
-  // orchestrators, not tests).
-  const std::wstring notepad = notepadPath();
-  ASSERT_FALSE(notepad.empty()) << "notepad.exe missing on this runner";
+  // Existence check BEFORE launching: if cmd.exe is missing on the
+  // runner, FAIL LOUDLY (NOT RUN reporting is for orchestrators, not
+  // tests).
+  const std::wstring cmd = cmdPath();
+  ASSERT_FALSE(cmd.empty()) << "cmd.exe missing on this runner";
 
-  const std::wstring lnk = tree.user_ + L"\\notepad.lnk";
-  ASSERT_TRUE(makeLnk(lnk, notepad, L"Notepad"));
+  const std::wstring lnk = tree.user_ + L"\\cmd.lnk";
+  ASSERT_TRUE(makeLnk(lnk, cmd, L"Command Prompt"));
 
   win32::Win32Launcher launcher({tree.user_});
   win32::Win32ProcessProbe probe;

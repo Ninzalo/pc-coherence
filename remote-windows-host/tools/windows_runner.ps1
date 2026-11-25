@@ -54,6 +54,26 @@ function load-vs-env {
 if ($Sha -ne '' -and $Sha -notmatch '^[0-9a-f]{40}$') { die 'sha_rejected' }
 if (($Action -eq 'build' -or $Action -eq 'unit-tests' -or $Action -eq 'selftest' -or $Action -eq 'probe-tray') -and -not (Test-Path $proj)) { die 'not_prepared' }
 
+# --- Global action watchdog (added 2026-11-25 after a live hang) --------
+# A step that blocks indefinitely (observed: a test whose ShellExecuteExW
+# call waited on a UWP app-model activation that never completes in
+# session 0) would otherwise hang the SSH session forever. A background
+# job kills this PowerShell process $WatchdogMinutes after start if the
+# action has not finished; every normal exit path removes the job first
+# (via the exit action). If the watchdog fires, no "RWH status=..._ok"
+# line has been emitted, so the verdict stays an honest non-PASS.
+$WatchdogMinutes = 25
+$wd = Start-Job -ScriptBlock {
+  param($parentPid, $secs)
+  Start-Sleep -Seconds $secs
+  Stop-Process -Id $parentPid -Force -ErrorAction SilentlyContinue
+} -ArgumentList $PID, ($WatchdogMinutes * 60)
+# No explicit job cleanup needed: the job's runspace dies with this
+# process on every normal exit path. NOTE: do NOT use "exit { block }"
+# here to register cleanup — in this PS 5.1 context the exit statement
+# terminates the script IMMEDIATELY at that line (verified 2026-11-25).
+emit 'watchdog_minutes' $WatchdogMinutes
+
 switch ($Action) {
   'status' {
     emit 'status' 'ok'
@@ -107,7 +127,12 @@ switch ($Action) {
     if ($rc -ne 0) { die 'configure_failed' }
     $rc = run-native $CMake @('--build', $build, '-j')
     if ($rc -ne 0) { die 'build_failed' }
-    $rc = run-native $Ctest @('--test-dir', $build, '--output-on-failure')
+    # Per-test timeout (300 s, 2026-11-25): a hung test is killed by
+    # ctest and reported as a clean failure instead of blocking the
+    # runner forever (see the global watchdog above for the second
+    # safety net).
+    $rc = run-native $Ctest @('--test-dir', $build, '--output-on-failure',
+                              '--timeout', '300')
     emit 'ctest_exit' $rc
     if ($rc -eq 0) { emit 'status' 'tests_ok'; exit 0 }
     else { emit 'status' 'tests_failed'; exit $rc }
