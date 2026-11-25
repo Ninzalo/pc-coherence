@@ -1,7 +1,7 @@
 # macOS Client — STATUS
 
-Last updated: 2026-11-24 (LAN end-to-end pairing with the Windows Host
-VERIFIED — see "LAN end-to-end pairing" below).
+Last updated: 2026-11-25 (RW-C-002 catalog UI with launch lifecycle
+integrated — 250/250 Swift checks @ 6edb929).
 
 ## Implemented and verified
 
@@ -11,7 +11,8 @@ VERIFIED — see "LAN end-to-end pairing" below).
 | App bootstrap: `main.swift`, `AppDelegate`, `AppController` main status window (title, version, host address, connection state — all via L10n keys) | `swift build`; launch smoke test `tools/launch_smoke_test.sh`: "APP RUNNING after 4s" (killed cleanly) |
 | **Signaling client + pairing flow (C-CONNECTION, task RW-C-001)**: `SignalingClient` state machine (disconnected/connecting/pairing/paired/rejected/locked) in `RemoteWindowsCore/Network/` with injectable transport/clock/timer; real TCP transport `NWSignalingTransport` (Network.framework); HELLO → challenge → 6-digit code (client-side format validation) → pairing_result (host safe_message surfaced, retry on rejection, no auto-retry when locked); auto `app_catalog_request` once after pairing (empty entries displayed honestly); 5 s heartbeat while connected (cancellable, last-activity exposed); any socket error resets to `.disconnected` — no stale connection | `SignalingClientSuite` 14 cases: 12 fake-transport cases + 2 loopback cases (real 127.0.0.1 socket, in-test POSIX host replying the canonical shapes; no LAN/external network) |
 | **Connection/pairing UI in the AppKit status window**: editable host address field (prefilled from Preferences `host:port`, saved on connect), Connect/Disconnect buttons, pairing code field + Enter code button, status label with the real state (Disconnected / Connecting / Pairing / Paired / Rejected: \<safe_message\> / Locked), host-name label, catalog label ("No applications available yet" while the host catalog is empty). Every control performs a real action (plan rule 6); controls enable/disable per state | `swift build` exit 0; launch smoke test `tools/launch_smoke_test.sh`: "APP RUNNING after 4s" (killed cleanly) |
-| Localization: `L10n` helper + `Resources/Localizable.en.json` (English-only MVP, FR-14); all new C-CONNECTION strings added as L10n keys (`status.pairing/paired/rejected/locked`, `connect.button`, `pairingCode.*`, `catalog.empty/available`, ...) | `L10nSuite` 4 cases pass (incl. `connectionStringsResolve`) |
+| **Catalog list UI with launch lifecycle (C-CATALOG, task RW-C-002)**: `SignalingClient.launchApp(appID:)` (paired-only, fresh `request_id`, one click = one `launch_app`, no retry/auto-resend, app_id only — never paths), `onLaunchResult`/`onAppStatus` callbacks (same delivery contract as `onCatalog`), `app_catalog_changed` now re-requests the catalog non-forced while paired; `CatalogLaunchModel` (Foundation-only, `RemoteWindowsApp/App/`) tracks the per-app phase idle→launching→started/failed with host `app_status` running/closed refinements (failed keeps its safe message; nothing invented client-side); AppKit catalog section replaces the count-only label: live `NSSearchField` filtering (case-insensitive substring), sorted view-based `NSTableView` (Name + Status, unavailable rows dimmed), Launch button enabled iff paired + selected entry available (blocked attempts surface `catalog.launchBlocked` + beep — no silent no-op), honest `catalog.empty` when empty, selection re-validated on wholesale catalog refresh, model + search reset on disconnect, all callbacks hop to main | `CatalogLaunchSuite` 8 fake-transport cases (launch_app shape/paired-only/fresh-ids, launch_result decode + unpaired-suppression, app_status running/closed, catalog_changed re-request non-forced + unpaired-no-op); GUI rendering NOT RUN (CLT, no display) — smoke-tested + code-review-verified |
+| Localization: `L10n` helper + `Resources/Localizable.en.json` (English-only MVP, FR-14); all C-CONNECTION and C-CATALOG strings as L10n keys (`status.pairing/paired/rejected/locked`, `connect.button`, `pairingCode.*`, `catalog.*` incl. 12 C-CATALOG keys, ...) | `L10nSuite` 5 cases pass (incl. `connectionStringsResolve`, `catalogStringsResolve` — 12 new key checks) |
 | Preferences: versioned UserDefaults model (`inactive_fps` default 10, range 1–60; host address/port 47987; master shortcut toggle; `settingsSchemaVersion = 1`) | `PreferencesSuite` 3 cases pass |
 | Pinned protocol contract snapshot v0.1.0 in `Protocol/Contract/` (27 files incl. the RW-H-006 media golden vectors `test-vectors/media/`, SHA256SUMS-verified) via `tools/sync_protocol_from_host.sh`; provenance `single-repo:<commit>` | `shasum -a 256 -c SHA256SUMS` → 27 OK (re-synced 2026-11-24 at host commit `d270d15`; sync tool updated to include `test-vectors/` subdirectories) |
 | Protocol adapter (`RemoteWindowsCore/Network/`): envelope JSON codec, semantic validation (1:1 port of Host `core/protocol_validation.cpp`, same error codes/bounds), framing (uint32 BE, 8 MiB cap, incremental `FrameReader`) — reused unchanged by the signaling client | `ProtocolCodecSuite` (20 cases), `ProtocolVectorSuite` (all 22 canonical vectors), `FramingSuite` (6 cases) pass |
@@ -24,15 +25,15 @@ Commands:
 ```
 cd remote-windows-client
 swift build
-swift run RemoteWindowsAppTests        # 185 checks, exit 0
+swift run RemoteWindowsAppTests        # 250 checks, exit 0
 tools/launch_smoke_test.sh             # app launch evidence
 ```
-Result: 2026-11-24, macOS 27.2.1, Swift 6.4.2 (Command Line Tools —
+Result: 2026-11-25, macOS 27.2.1, Swift 6.4.2 (Command Line Tools —
 no full Xcode), SwiftPM. Build clean (exit 0).
-**185/185 test checks PASSED, 0 failures** (exit code 0; verified across 3
-consecutive runs). Previous baseline was 83/83; C-CONNECTION added 102
-checks (14 new `SignalingClientSuite` cases + 5 new `L10nSuite` checks).
-Launch smoke: process running after 4 s, terminated cleanly.
+**250/250 test checks PASSED, 0 failures** (exit code 0) — 185 baseline
++ 65 C-CATALOG checks (8 new `CatalogLaunchSuite` cases +
+`catalogStringsResolve` 12 checks). Previous baseline 185/185 @
+RW-C-001. Launch smoke: process running after 4 s, terminated cleanly.
 
 ### Environment deviation (recorded per plan rule 2)
 
@@ -51,9 +52,6 @@ Launch smoke: process running after 4 s, terminated cleanly.
 
 ## NOT implemented yet (honest list — no fake functionality)
 
-- Catalog UI with real entries + launch lifecycle (C-CATALOG). The current
-  UI shows the honest empty-catalog state; the host catalog scanner is a
-  later Host task. `app_catalog_changed` handling (re-request) lands with C-CATALOG.
 - Remote window presentation, video surface (C-WINDOWS / C-PERF).
   Media transport is now specified (root ADR-0008: TCP 47988, H.264,
   AES-256-GCM; normative PROTOCOL §9, RW-H-006) but not yet
@@ -93,10 +91,8 @@ changed to `192.168.100.139` in the host-address field for the test
 
 ## Next tasks
 
-1. C-CATALOG: catalog UI with entries, `app_catalog_changed` re-request,
-   launch lifecycle.
-2. C-INPUT: shortcut adaptation stack with FR-08/§6.4 coverage.
-3. C-MEDIA (parallel Host track RW-H-007/008): media-channel receiver —
+1. C-INPUT: shortcut adaptation stack with FR-08/§6.4 coverage.
+2. C-MEDIA (parallel Host track RW-H-007/008): media-channel receiver —
    TCP 47988 client with the §9.2 handshake (CryptoKit HMAC-SHA256),
    §9.4 framing, per-stream AES-256-GCM open (CryptoKit must reproduce
    the golden vectors in `Protocol/Contract/test-vectors/media/`), then
