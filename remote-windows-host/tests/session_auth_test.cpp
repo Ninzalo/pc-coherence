@@ -23,9 +23,12 @@
 #include <vector>
 
 #include "app/SessionAuth.hpp"
+#include "core/catalog_service.hpp"
 #include "core/pairing.hpp"
 #include "network/signaling_client.hpp"
 #include "network/signaling_server.hpp"
+
+#include <atomic>
 
 using namespace remotewindows;
 namespace proto = remotewindows::protocol;
@@ -626,6 +629,280 @@ TEST(SessionAuthE2E, UnpairedClientControlRejectedOverChannel) {
   auto r4 = client.readEnvelope(5000, err, code);
   ASSERT_TRUE(r4.has_value()) << err;
   EXPECT_EQ(r4->kind, "heartbeat");
+
+  client.close();
+  server.stop();
+}
+
+// ------------------------------------------- RW-H-008: ControlServices e2e
+// With ControlServices wired to in-memory fakes, a PAIRED session gets a
+// REAL catalog (from the fake source) and REAL launch results (through the
+// fake launcher) instead of the empty / not_implemented placeholders.
+// Gating semantics are unchanged; only the paired responses differ.
+
+namespace {
+
+// Two apps: one start-menu shortcut, one user-added.
+struct E2eFixture {
+  core::CatalogRecord explorer{
+      core::makeAppId("file explorer", "C:\\start\\explorer.lnk"),
+      "File Explorer", "file explorer", "C:\\start\\explorer.lnk",
+      "start_menu", 10, true, ""};
+  core::CatalogRecord calculator{
+      core::makeAppId("calculator", "C:\\start\\calc.lnk"),
+      "Calculator", "calculator", "C:\\start\\calc.lnk", "user_added",
+      30, true, ""};
+
+  struct Source : core::CatalogSource {
+    E2eFixture* fx = nullptr;
+    int scan_calls = 0;
+    explicit Source(E2eFixture* f) : fx(f) {}
+    std::vector<core::CatalogRecord> scan() override {
+      ++scan_calls;
+      return {fx->explorer, fx->calculator};
+    }
+  } source;
+
+  struct Launcher : core::AppLauncher {
+    core::LaunchOutcome next{true, "", "", 4242};
+    core::LaunchOutcome launch(const core::LaunchRequest&) override {
+      return next;
+    }
+  } launcher;
+
+  struct Probe : core::ProcessProbe {
+    std::atomic<bool> alive{true};
+    bool isAlive(uint32_t) override { return alive; }
+  } probe;
+
+  core::CatalogService catalog;
+  core::LaunchService launch;
+  app::ControlServices services;
+
+  E2eFixture()
+      : source{this},
+        catalog(&source),
+        launch(catalog, &launcher, &probe),
+        services{&catalog, &launch} {}
+};
+
+}  // namespace
+
+// Pair over the real loopback channel, then exchange a real catalog and a
+// real launch through the injected services.
+TEST(SessionAuthE2E, PairedServicesDeliverRealCatalogAndLaunch) {
+  E2eFixture fx;
+  app::SignalingSessionHandler handler("DESKTOP-PC", nullptr,
+                                       &fx.services);
+  net::SignalingServer server(&handler);
+  std::string err;
+  ASSERT_TRUE(server.start("127.0.0.1", 0, err)) << err;
+  auto port = server.port(err);
+
+  net::SignalingClient client;
+  ASSERT_TRUE(client.connectTo("127.0.0.1", port, err)) << err;
+  ASSERT_TRUE(client.sendEnvelope(clientHello(), err)) << err;
+  auto read = [&client, &err]() {
+    std::string code;
+    return client.readEnvelope(5000, err, code);
+  };
+
+  auto r1 = read();
+  ASSERT_TRUE(r1.has_value()) << err;
+  EXPECT_EQ(r1->kind, "hello");
+  auto r2 = read();
+  ASSERT_TRUE(r2.has_value()) << err;
+  EXPECT_EQ(r2->kind, "pairing_challenge");
+  const auto* pc = std::get_if<proto::PairingChallenge>(&r2->payload);
+  ASSERT_NE(pc, nullptr);
+  ASSERT_TRUE(pc->challenge_nonce.has_value());
+  proto::Envelope attempt;
+  attempt.kind = "pairing_challenge";
+  proto::PairingChallenge ap;
+  ap.one_time_code = handler.currentPairingCode();
+  ap.challenge_nonce = *pc->challenge_nonce;
+  attempt.payload = ap;
+  ASSERT_TRUE(client.sendEnvelope(attempt, err)) << err;
+  auto r3 = read();
+  ASSERT_TRUE(r3.has_value()) << err;
+  const auto* pr = std::get_if<proto::PairingResult>(&r3->payload);
+  ASSERT_NE(pr, nullptr);
+  ASSERT_TRUE(pr->accepted);
+
+  // app_catalog_request -> REAL catalog from the fake source.
+  proto::Envelope req;
+  req.kind = "app_catalog_request";
+  req.request_id = 9;
+  proto::AppCatalogRequest acr;
+  acr.force_rescan = false;
+  req.payload = acr;
+  ASSERT_TRUE(client.sendEnvelope(req, err)) << err;
+  auto r4 = read();
+  ASSERT_TRUE(r4.has_value()) << err;
+  EXPECT_EQ(r4->kind, "app_catalog");
+  EXPECT_EQ(r4->request_id.value_or(0), 9u);
+  const auto* cat = std::get_if<proto::AppCatalog>(&r4->payload);
+  ASSERT_NE(cat, nullptr);
+  EXPECT_GE(cat->catalog_revision, 1u);
+  ASSERT_EQ(cat->entries.size(), 2u);
+  bool saw_explorer = false, saw_calc = false;
+  for (const auto& e : cat->entries) {
+    if (e.app_id == fx.explorer.app_id) {
+      saw_explorer = true;
+      EXPECT_EQ(e.display_name, "File Explorer");
+      EXPECT_EQ(e.type, proto::AppType::WIN32_SHORTCUT);
+      EXPECT_TRUE(e.available);
+    } else if (e.app_id == fx.calculator.app_id) {
+      saw_calc = true;
+      EXPECT_EQ(e.display_name, "Calculator");
+      EXPECT_EQ(e.type, proto::AppType::USER_ADDED);
+    }
+  }
+  EXPECT_TRUE(saw_explorer);
+  EXPECT_TRUE(saw_calc);
+
+  // launch_app (known id) -> REAL launch_result STARTED with a session id.
+  proto::Envelope lreq;
+  lreq.kind = "launch_app";
+  lreq.request_id = 10;
+  proto::LaunchApp la;
+  la.app_id = fx.calculator.app_id;
+  lreq.payload = la;
+  ASSERT_TRUE(client.sendEnvelope(lreq, err)) << err;
+  auto r5 = read();
+  ASSERT_TRUE(r5.has_value()) << err;
+  EXPECT_EQ(r5->kind, "launch_result");
+  EXPECT_EQ(r5->request_id.value_or(0), 10u);
+  const auto* lr = std::get_if<proto::LaunchResult>(&r5->payload);
+  ASSERT_NE(lr, nullptr);
+  EXPECT_EQ(lr->app_id, fx.calculator.app_id);
+  EXPECT_EQ(lr->state, proto::LaunchState::STARTED);
+  EXPECT_TRUE(lr->error_code.empty());
+  ASSERT_TRUE(lr->application_session_id.has_value());
+  EXPECT_EQ(lr->application_session_id->size(), 36u);
+
+  client.close();
+  server.stop();
+}
+
+// Heartbeat piggyback: app_catalog_changed on a new revision, app_status
+// CLOSED when the probe reports the process dead (and never twice).
+TEST(SessionAuthE2E, PairedServicesHeartbeatPiggyback) {
+  E2eFixture fx;
+  app::SignalingSessionHandler handler("DESKTOP-PC", nullptr,
+                                       &fx.services);
+  net::SignalingServer server(&handler);
+  std::string err;
+  ASSERT_TRUE(server.start("127.0.0.1", 0, err)) << err;
+  auto port = server.port(err);
+
+  net::SignalingClient client;
+  ASSERT_TRUE(client.connectTo("127.0.0.1", port, err)) << err;
+  ASSERT_TRUE(client.sendEnvelope(clientHello(), err)) << err;
+  auto read = [&client, &err]() {
+    std::string code;
+    return client.readEnvelope(5000, err, code);
+  };
+
+  auto r1 = read();
+  ASSERT_TRUE(r1.has_value()) << err;
+  auto r2 = read();
+  ASSERT_TRUE(r2.has_value()) << err;
+  const auto* pc = std::get_if<proto::PairingChallenge>(&r2->payload);
+  ASSERT_NE(pc, nullptr);
+  ASSERT_TRUE(pc->challenge_nonce.has_value());
+  proto::Envelope attempt;
+  attempt.kind = "pairing_challenge";
+  proto::PairingChallenge ap;
+  ap.one_time_code = handler.currentPairingCode();
+  ap.challenge_nonce = *pc->challenge_nonce;
+  attempt.payload = ap;
+  ASSERT_TRUE(client.sendEnvelope(attempt, err)) << err;
+  auto r3 = read();
+  ASSERT_TRUE(r3.has_value()) << err;
+  const auto* pr = std::get_if<proto::PairingResult>(&r3->payload);
+  ASSERT_NE(pr, nullptr);
+  ASSERT_TRUE(pr->accepted);
+
+  // Catalog request first: triggers the scan (revision N, un-broadcast).
+  proto::Envelope req;
+  req.kind = "app_catalog_request";
+  req.request_id = 21;
+  req.payload = proto::AppCatalogRequest{};
+  ASSERT_TRUE(client.sendEnvelope(req, err)) << err;
+  auto c1 = read();
+  ASSERT_TRUE(c1.has_value()) << err;
+  EXPECT_EQ(c1->kind, "app_catalog");
+  const auto* cat = std::get_if<proto::AppCatalog>(&c1->payload);
+  ASSERT_NE(cat, nullptr);
+  const uint32_t rev = cat->catalog_revision;
+  ASSERT_GE(rev, 1u);
+
+  // Heartbeat piggybacks the catalog change notification exactly once.
+  auto hb = [&client, &err]() {
+    proto::Envelope e;
+    e.kind = "heartbeat";
+    proto::Heartbeat hbp;
+    hbp.sender_time_ms = 1;
+    e.payload = hbp;
+    return client.sendEnvelope(e, err);
+  };
+  ASSERT_TRUE(hb()) << err;
+  auto h1 = read();
+  ASSERT_TRUE(h1.has_value()) << err;
+  EXPECT_EQ(h1->kind, "heartbeat");
+  auto h2 = read();
+  ASSERT_TRUE(h2.has_value()) << err;
+  EXPECT_EQ(h2->kind, "app_catalog_changed");
+  const auto* ac = std::get_if<proto::AppCatalogChanged>(&h2->payload);
+  ASSERT_NE(ac, nullptr);
+  EXPECT_EQ(ac->catalog_revision, rev);
+
+  // No change since the broadcast: a bare heartbeat.
+  ASSERT_TRUE(hb()) << err;
+  auto h3 = read();
+  ASSERT_TRUE(h3.has_value()) << err;
+  EXPECT_EQ(h3->kind, "heartbeat");
+
+  // Launch, then kill the process; the next heartbeat reports CLOSED once.
+  proto::Envelope lreq;
+  lreq.kind = "launch_app";
+  lreq.request_id = 22;
+  proto::LaunchApp la;
+  la.app_id = fx.calculator.app_id;
+  lreq.payload = la;
+  ASSERT_TRUE(client.sendEnvelope(lreq, err)) << err;
+  auto l1 = read();
+  ASSERT_TRUE(l1.has_value()) << err;
+  const auto* lr = std::get_if<proto::LaunchResult>(&l1->payload);
+  ASSERT_NE(lr, nullptr);
+  ASSERT_EQ(lr->state, proto::LaunchState::STARTED);
+  ASSERT_TRUE(lr->application_session_id.has_value());
+
+  ASSERT_TRUE(hb()) << err;  // process still alive: bare heartbeat
+  auto a0 = read();
+  ASSERT_TRUE(a0.has_value()) << err;
+  EXPECT_EQ(a0->kind, "heartbeat");
+
+  fx.probe.alive = false;
+  ASSERT_TRUE(hb()) << err;
+  auto a1 = read();
+  ASSERT_TRUE(a1.has_value()) << err;
+  EXPECT_EQ(a1->kind, "heartbeat");
+  auto a2 = read();
+  ASSERT_TRUE(a2.has_value()) << err;
+  EXPECT_EQ(a2->kind, "app_status");
+  const auto* st = std::get_if<proto::AppStatus>(&a2->payload);
+  ASSERT_NE(st, nullptr);
+  EXPECT_EQ(st->app_id, fx.calculator.app_id);
+  EXPECT_EQ(st->state, proto::AppRunState::CLOSED);
+  EXPECT_EQ(st->application_session_id, *lr->application_session_id);
+
+  // No duplicate status event for the same session.
+  ASSERT_TRUE(hb()) << err;
+  auto a3 = read();
+  ASSERT_TRUE(a3.has_value()) << err;
+  EXPECT_EQ(a3->kind, "heartbeat");
 
   client.close();
   server.stop();

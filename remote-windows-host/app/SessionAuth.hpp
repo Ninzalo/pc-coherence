@@ -26,6 +26,11 @@
 #include "core/protocol_types.hpp"
 #include "network/signaling_server.hpp"
 
+namespace remotewindows::core {
+class CatalogService;
+class LaunchService;
+}
+
 namespace remotewindows::app {
 
 class Logger;  // forward declared; handler takes an optional pointer
@@ -39,6 +44,16 @@ enum class SessionState {
 };
 
 const char* sessionStateName(SessionState s);
+
+// RW-H-008: shared cross-session control services (catalog + launch),
+// injected by the app shell (RW-H-009 wiring). nullptr = legacy placeholder
+// behavior (empty catalog / not_implemented) so the gating semantics and
+// all pre-injection behavior stay byte-identical.
+struct ControlServices {
+  core::CatalogService* catalog = nullptr;
+  core::LaunchService* launch = nullptr;
+};
+
 
 // Kinds gated by pairing (task RW-H-004 requirement 3 / PROTOCOL §6).
 // While unpaired none of these may be processed; after pairing the
@@ -96,7 +111,8 @@ class PairingHost {
 class SessionAuth {
  public:
   explicit SessionAuth(PairingHost* pairing, std::string host_name,
-                       std::function<uint64_t()> now_ms = {});
+                       std::function<uint64_t()> now_ms = {},
+                       ControlServices* services = nullptr);
 
   SessionState state() const { return state_; }
   const std::string& hostName() const { return host_name_; }
@@ -118,12 +134,13 @@ class SessionAuth {
   protocol::Envelope challengeReply() const;
   protocol::Envelope pairingReply(bool accepted, const std::string& error_code,
                                   const std::string& safe_message) const;
-  static std::vector<protocol::Envelope> controlReply(
-      const protocol::Envelope& in, bool paired);
+  std::vector<protocol::Envelope> controlReply(const protocol::Envelope& in,
+                                               bool paired);
 
   PairingHost* pairing_;
   std::string host_name_;
   std::function<uint64_t()> now_ms_;
+  ControlServices* services_;  // RW-H-008; nullptr = legacy placeholders
   SessionState state_ = SessionState::Unpaired;
   std::string nonce_;       // issued challenge nonce; never logged
   std::string session_key_;  // never logged
@@ -134,7 +151,8 @@ class SessionAuth {
 // tests) and only receives structured, secret-free fields.
 class SignalingSessionHandler : public net::SignalingServer::Handler {
  public:
-  explicit SignalingSessionHandler(std::string host_name, Logger* log = nullptr);
+  explicit SignalingSessionHandler(std::string host_name, Logger* log = nullptr,
+                                   ControlServices* services = nullptr);
 
   bool onEnvelope(net::Connection& c,
                   const protocol::Envelope& e) override;
@@ -159,6 +177,7 @@ class SignalingSessionHandler : public net::SignalingServer::Handler {
   PairingHost pairing_;
   std::string host_name_;
   Logger* log_;
+  ControlServices* services_;  // RW-H-008; passed to every SessionAuth
   mutable std::mutex mu_;
   std::unordered_map<const net::Connection*, std::shared_ptr<SessionAuth>>
       sessions_;

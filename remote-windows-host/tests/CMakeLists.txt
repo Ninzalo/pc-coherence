@@ -9,6 +9,7 @@ set(RWH_TESTS
   validation_test
   fps_policy_test
   catalog_test
+  catalog_service_test
   window_relationships_test
   input_test
   pairing_test

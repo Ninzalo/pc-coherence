@@ -24,6 +24,7 @@ add_library(rwh_core STATIC
   core/protocol_validation.cpp
   core/fps_policy.cpp
   core/catalog.cpp
+  core/catalog_service.cpp
   core/window_relationships.cpp
   core/input.cpp
   core/pairing.cpp

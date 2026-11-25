@@ -5,6 +5,7 @@
 #include <cstdio>
 
 #include "app/Logger.hpp"
+#include "core/catalog_service.hpp"
 
 namespace remotewindows::app {
 
@@ -97,10 +98,12 @@ void PairingHost::consume() {
 // -------------------------------------------------------------- SessionAuth
 
 SessionAuth::SessionAuth(PairingHost* pairing, std::string host_name,
-                         std::function<uint64_t()> now_ms)
+                         std::function<uint64_t()> now_ms,
+                         ControlServices* services)
     : pairing_(pairing),
       host_name_(std::move(host_name)),
-      now_ms_(std::move(now_ms)) {}
+      now_ms_(std::move(now_ms)),
+      services_(services) {}
 
 uint64_t SessionAuth::nowMs() const {
   return now_ms_ ? now_ms_() : steadyMs();
@@ -164,11 +167,20 @@ std::vector<protocol::Envelope> SessionAuth::controlReply(
     protocol::Envelope out;
     out.kind = "app_catalog";
     out.request_id = in.request_id;
-    protocol::AppCatalog cat;
-    cat.catalog_revision = 1;  // placeholder; empty entries (catalog
-                               // scanner is a later task — do not invent)
-    cat.entries = {};
-    out.payload = cat;
+    if (services_ && services_->catalog) {
+      // RW-H-008: real catalog from the shared CatalogService (FR-01).
+      bool force = false;
+      if (const auto* req =
+              std::get_if<protocol::AppCatalogRequest>(&in.payload))
+        force = req->force_rescan;
+      out.payload = services_->catalog->snapshot(force);
+    } else {
+      protocol::AppCatalog cat;
+      cat.catalog_revision = 1;  // placeholder; empty entries (catalog
+                                 // scanner is a later task — do not invent)
+      cat.entries = {};
+      out.payload = cat;
+    }
     return {out};
   }
 
@@ -179,9 +191,15 @@ std::vector<protocol::Envelope> SessionAuth::controlReply(
     protocol::LaunchResult lr;
     if (const auto* la = std::get_if<protocol::LaunchApp>(&in.payload))
       lr.app_id = la->app_id;
-    lr.state = protocol::LaunchState::FAILED;
-    lr.error_code = paired ? "not_implemented" : "not_paired";
-    lr.safe_message = safeMessageFor(lr.error_code);
+    if (paired && services_ && services_->launch) {
+      // RW-H-008: real launch through the allow-listed LaunchService
+      // (FR-02); the client sent only an app_id.
+      lr = services_->launch->handleLaunch(lr.app_id);
+    } else {
+      lr.state = protocol::LaunchState::FAILED;
+      lr.error_code = paired ? "not_implemented" : "not_paired";
+      lr.safe_message = safeMessageFor(lr.error_code);
+    }
     out.payload = lr;
     return {out};
   }
@@ -312,7 +330,33 @@ std::vector<protocol::Envelope> SessionAuth::handle(
     protocol::Heartbeat hb;
     hb.sender_time_ms = static_cast<int64_t>(nowMs());
     out.payload = hb;
-    return {out};
+    std::vector<protocol::Envelope> replies{std::move(out)};
+    // RW-H-008 heartbeat piggyback (thread-local: this connection's
+    // replies only — net::Connection is owned by its worker thread).
+    // Two concurrent workers may both observe the revision change and
+    // both notify; a duplicate app_catalog_changed is idempotent for the
+    // client, so no cross-connection coordination is needed.
+    if (services_ && services_->catalog) {
+      const uint32_t rev = services_->catalog->revision();
+      if (rev != services_->catalog->lastBroadcastRevision()) {
+        services_->catalog->markBroadcast(rev);
+        protocol::Envelope ev;
+        ev.kind = "app_catalog_changed";
+        protocol::AppCatalogChanged ac;
+        ac.catalog_revision = rev;
+        ev.payload = ac;
+        replies.push_back(std::move(ev));
+      }
+    }
+    if (services_ && services_->launch) {
+      for (auto st : services_->launch->sweep()) {
+        protocol::Envelope ev;
+        ev.kind = "app_status";
+        ev.payload = std::move(st);
+        replies.push_back(std::move(ev));
+      }
+    }
+    return replies;
   }
 
   // ---- gated control kinds ----------------------------------------------
@@ -328,8 +372,9 @@ std::vector<protocol::Envelope> SessionAuth::handle(
 // ---------------------------------------------------- SignalingSessionHandler
 
 SignalingSessionHandler::SignalingSessionHandler(std::string host_name,
-                                                 Logger* log)
-    : host_name_(std::move(host_name)), log_(log) {
+                                                 Logger* log,
+                                                 ControlServices* services)
+    : host_name_(std::move(host_name)), log_(log), services_(services) {
   pairing_.beginEpoch(nowMs());
   if (log_)
     log_->write(LogLevel::Info, "host.pairing_epoch",
@@ -341,7 +386,9 @@ std::shared_ptr<SessionAuth> SignalingSessionHandler::sessionFor(
   std::lock_guard<std::mutex> lk(mu_);
   auto it = sessions_.find(c);
   if (it == sessions_.end()) {
-    auto s = std::make_shared<SessionAuth>(&pairing_, host_name_);
+    std::function<uint64_t()> default_clock;
+    auto s = std::make_shared<SessionAuth>(
+        &pairing_, host_name_, default_clock, services_);
     it = sessions_.emplace(c, std::move(s)).first;
   }
   return it->second;
@@ -384,6 +431,34 @@ bool SignalingSessionHandler::onEnvelope(net::Connection& c,
             fields.push_back({"error", pr->error_code});
         }
       }
+    } else if (e.kind == "app_catalog_request" &&
+               session->state() == SessionState::Paired) {
+      // RW-H-008: real catalog reply. Stable fields only — never paths.
+      event = "session.catalog";
+      if (const auto* req =
+              std::get_if<protocol::AppCatalogRequest>(&e.payload))
+        fields.push_back({"force", req->force_rescan ? "true" : "false"});
+      if (!replies.empty() && replies[0].kind == "app_catalog")
+        if (const auto* cat =
+                std::get_if<protocol::AppCatalog>(&replies[0].payload)) {
+          fields.push_back({"entries", std::to_string(cat->entries.size())});
+          fields.push_back(
+              {"revision", std::to_string(cat->catalog_revision)});
+        }
+    } else if (e.kind == "launch_app" &&
+               session->state() == SessionState::Paired) {
+      // RW-H-008: real launch result. app_id only — never the launch
+      // target, paths, or OS errors.
+      event = "session.launch";
+      if (const auto* la = std::get_if<protocol::LaunchApp>(&e.payload))
+        fields.push_back({"app_id", la->app_id});
+      if (!replies.empty() && replies[0].kind == "launch_result")
+        if (const auto* lr =
+                std::get_if<protocol::LaunchResult>(&replies[0].payload)) {
+          fields.push_back({"state", protocol::launchStateName(lr->state)});
+          if (!lr->error_code.empty())
+            fields.push_back({"error", lr->error_code});
+        }
     } else if (isGatedControlKind(e.kind) &&
                session->state() != SessionState::Paired) {
       event = "session.gated";  // dropped or not_paired rejection
