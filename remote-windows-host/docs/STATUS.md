@@ -1,7 +1,8 @@
 # Windows Host — STATUS
 
-Last updated: 2026-11-24 (LAN end-to-end pairing with the macOS Client
-VERIFIED — see "LAN end-to-end pairing (verified)" below).
+Last updated: 2026-11-25 (RW-H-008 portable catalog + launch services
+integrated — 143/143 macOS + Windows runner 146/146 unit-tests +
+selftest @ `d342bb3`; see "Implemented and verified" below).
 
 ## Implemented and verified
 
@@ -14,7 +15,8 @@ VERIFIED — see "LAN end-to-end pairing (verified)" below).
 | `docs/PROTOCOL.md` framing, validation, authorization, lifecycle rules | present, normative for both peers; codec now enforces `window_id` UUID format and `title` ≤ 512 chars at decode time (`bad_uuid` / `title_too_long`) |
 | Media channel normative spec (RW-H-006, CONTRACT): PROTOCOL §9 — TCP 47988, handshake, key derivation (matching `core/pairing.cpp`), little-endian binary framing, stream lifecycle, robustness, security (ADR-0008) + golden vectors `protocol/test-vectors/media/` (3× AES-256-GCM + key derivation; generated with CryptoKit, independently re-verified with pyca/cryptography, OpenSSL 3.5.9 EVP, and shasum CLI) | `bash tools/export_protocol.sh <dir>` → bundle incl. `test-vectors/media/*.json` in SHA256SUMS (27 entries, verified); Client snapshot re-synced via `tools/sync_protocol_from_host.sh` (`shasum -a 256 -c` OK); §7.4 session-key formula corrected to the implemented `rwh-pairing-v1\|code\|host_name`; stale WebRTC note in §1 removed |
 | `media/` portable media core (RW-H-007, H-MEDIA): the machine-facing parts of PROTOCOL §9 — binary packet framing (§9.4, 13-byte LE header, exact-byte unit test), per-window stream key / nonce-prefix derivation (§9.3, golden `key-derivation.json` reproduced exactly), thread-safe stream registry (§9.5, per-stream `core::FpsGate`, 16-bit collision documented: last add wins), RFC 2104 HMAC-SHA256 (§9.2 handshake, RFC 4231 TC1/TC2), portable `IAead` interface + Windows CNG AES-256-GCM backend (`AeadCng`, WIN32-only TU) | 127/127 macOS CTest (previous 104 + 23 new media tests, command below) + **CNG backend VERIFIED on the Windows runner**: `unit-tests` @ `d5c1f044` → `100% tests passed out of 130`, `RWH status=tests_ok`, incl. `MediaAeadCng.GoldenVectorsReproducedExactly` (all three `aes-256-gcm.json` ciphertext+tag values reproduced by live BCrypt on DESKTOP-PC), `RoundTrip1000Bytes`, `OpenRejectsTamperedCiphertext` (evidence below) |
-| ADRs 0001–0009 | `docs/decisions/` (0008: MVP media transport — TCP 47988, H.264, AES-256-GCM, WebRTC deferred; 0009: single-repo topology deviation from plan §4.3) |
+| ADRs 0001–0009 | `docs/decisions/` (0008: MVP media transport — TCP 47988, H.264, AES-GCM, WebRTC deferred; 0009: single-repo topology deviation from plan §4.3) |
+| `core/catalog_service` portable catalog + launch domain (RW-H-008, H-CATALOG): `CatalogSource`/`CatalogService` (scan → dedupe → protocol-ready `app_catalog` snapshot, revision + broadcast bookkeeping), `AppLauncher`/`ProcessProbe` interfaces + `LaunchService` (allow-listed launch by `app_id`, per-app launch sessions with UUID session ids, liveness sweep → `app_status`), `makeUuid`; `app::ControlServices` injection into `SessionAuth` (real catalog reply, real launch result, heartbeat piggyback for `app_catalog_changed` + `app_status` — thread-local, no cross-connection writes; nullptr = byte-identical legacy placeholders) | 143/143 macOS CTest (previous 127 + 14 `catalog_service_test` + 2 loopback `session_auth` e2e with wired services, command below) + **Windows runner `unit-tests` @ `d342bb3`: `100% tests passed out of 146`, `RWH status=tests_ok`** (146 = 143 portable + 3 CNG-only). Integration review fix `d342bb3`: `CatalogService::find()` returns a record copy (the child's pointer return was only valid under the now-released lock → UAF under a concurrent forced rescan) and `LaunchService::sessions()` returns a locked copy |
 
 ## Last successful build (this tree, portable core on macOS)
 
@@ -24,23 +26,28 @@ cmake -S remote-windows-host -B remote-windows-host/build
 cmake --build remote-windows-host/build -j
 ctest --test-dir remote-windows-host/build --output-on-failure
 ```
-Result: 2026-11-24, macOS 27.2.1, CMake 4.5.1,
-Ninja 1.13.2, clang (Apple). Build clean (exit 0). **127/127 tests
-PASSED** (previous 104 + 23 new media-core tests, 0 failed). Suites:
+Result: 2026-11-25, macOS 27.2.1, CMake 4.5.1,
+Ninja 1.13.2, clang (Apple). Build clean (exit 0). **143/143 tests
+PASSED** (previous 127 + 14 new `catalog_service_test` cases + 2 new
+`session_auth` loopback e2e cases, 0 failed). Suites:
 sha256, protocol_version, protocol_json (incl. 22 canonical test vectors),
 validation, fps_policy, catalog, window_relationships, input, pairing,
 power_policy, authorization, framing, signaling_e2e, session_auth
-(21 tests: 16 state-machine + 2 PairingHost rotation + 3 loopback e2e
-over the real SignalingServer/Client; 3 new in RW-H-005 covering
-rotation-after-consume and the tray rotate path), plus the RW-H-007
-media suites: media_framing (9: exact 13-byte wire header, round-trip,
-short/bad-magic/bad-version/oversize rejection, stream_id = first 2
-sha256 bytes LE, nonce layout), media_stream_keys (3: every field of
-`protocol/test-vectors/media/key-derivation.json` reproduced exactly),
-media_stream_registry (8: add/find/remove, idempotent add resets
-counters, distinct ids, findByStreamId, collision last-add-wins,
-FpsGate core defaults), hmac_sha256 (3: RFC 4231 TC1/TC2 + §9.2-shaped
-self-consistency).
+(now 23 tests: the 21 from RW-H-004/005 + 2 new RW-H-008 loopback e2e —
+paired real catalog + real launch over real 127.0.0.1 TCP with wired
+`ControlServices`, and the heartbeat piggyback: `app_catalog_changed`
+once, `app_status` CLOSED once, no duplicates), plus the RW-H-007 media
+suites (media_framing 9, media_stream_keys 3, media_stream_registry 8,
+hmac_sha256 3 — see previous build notes) and the new RW-H-008
+catalog_service suite (16: snapshot dedupe/protocol-readiness with
+priority-wins entry selection, no-rescan caching, forced-rescan revision
+bump + broadcast marks, find hit/miss, union availability, empty-source
+revision floor ≥ 1, launch success session with uuid-format session id,
+unknown-app-id allow-list proof — launcher call count stays 0 —
+unavailable-entry `launch_failed`, launcher typed-failure pass-through +
+empty-code fallback, sweep reports a dead process exactly once, re-launch
+replaces the session (new id/pid/timestamp), `makeUuid` format +
+1000-sample uniqueness).
 
 ## Windows runner (Section 18.4) — verified
 
@@ -51,6 +58,7 @@ self-consistency).
 | Exact-SHA build + unit tests | `windows-runner.sh unit-tests` @ `9450a49f8c58acb8c93680939e8b7f2dcb95d6c3`: `RWH sha=9450a49...`, `100% tests passed out of 83`, `RWH ctest_exit=0`, `RWH status=tests_ok` (RelWithDebInfo, Ninja, MSVC) |
 | Portability fix found by the runner | POSIX `ssize_t` in the TCP layer is not declared by MSVC in C++ mode → `std::int64_t` (commit `978dc55`); clang still 83/83 |
 | CNG AES-256-GCM media backend (RW-H-007) | `unit-tests` @ `d5c1f044a89ca09122475f987059b536cda5f0b6` (2026-11-24): `100% tests passed out of 130`, `RWH ctest_exit=0`, `RWH status=tests_ok` — the 3 `MediaAeadCng` tests PASS on MSVC/SDK 26100: golden vectors (ciphertext+tag, all three), 1000-byte round-trip, tamper rejection. CNG API corrections found by the runner (SDK 10.0.26100): `BCryptCreateKey` absent → `BCryptGenerateSymmetricKey`; GCM nonce+tag via `BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO` (pPaddingInfo), NOT via pbIV (a pbIV-only nonce yields `STATUS_INVALID_PARAMETER`); `BCRYPT_INIT_AUTH_MODE_INFO(info)` takes the struct NAME (macro wraps param in `&`) |
+| Portable catalog/launch core (RW-H-008) | `prepare` @ `d342bb3258f4b13e1bba1226dbaea8da2cd95e95` (2026-11-25): `RWH status=prepared`; `unit-tests` @ same SHA: `100% tests passed out of 146`, `RWH ctest_exit=0`, `RWH status=tests_ok` (MSVC 14.51.36231 / SDK 10.0.26100, RelWithDebInfo, Ninja — 146 = 143 portable + 3 WIN32-only CNG); `selftest` @ same SHA: `{"selftest":true,"passed":true,"port":47987,"reply_kind":"app_catalog","envelopes":3,"pairing":"accepted","reply_kinds":"hello;pairing_challenge;pairing_result;app_catalog"}`, `RWH selftest_exit=0`, `RWH status=selftest_ok` (behavior unchanged — `AppController` does not wire `ControlServices` until RW-H-009) |
 
 ## Windows Host app shell (H-FOUND) — verified
 
@@ -285,9 +293,14 @@ Windows runner (DESKTOP-PC), 2026-11-24:
 ## Implemented, NOT verified on Windows
 
 - Win32 adapters (`win32/`): capture (WGC), window registry/events,
-  input (SendInput), power (SetSuspendState / InitiateSystemShutdownExW),
-  catalog scan (IShellLinkW). **NOT RUN** — not implemented yet (next
-  feature tracks: H-CATALOG, then H-MEDIA/H-WINDOWS/H-INPUT/H-POWER).
+  input (SendInput), power (SetSuspendState /
+  InitiateSystemShutdownExW). **NOT RUN** — not implemented yet (next
+  feature tracks: H-WINDOWS/H-MEDIA/H-INPUT/H-POWER).
+- Win32 catalog adapters: Start Menu IShellLinkW scan, allow-listed
+  `ShellExecuteExW` launcher, process probe. **NOT RUN** — not
+  implemented yet; the portable catalog/launch core they build on is
+  done (RW-H-008). The Win32 layer + app/selftest wiring is RW-H-009
+  (packet `docs/agent-tasks/RW-H-009.md`).
 
 ## Blocked
 
@@ -297,13 +310,20 @@ Windows runner (DESKTOP-PC), 2026-11-24:
 
 ## Next tasks
 
-1. H-CATALOG: Start Menu scan + `LAUNCH_APP` by allow-listed `app_id`
-   (IShellLinkW / ShellExecuteExW) — the Client already sends
-   `app_catalog_request` on pairing and renders "No applications
-   available yet" while the catalog is empty.
+1. H-CATALOG (RW-H-009): Win32 Start Menu source (IShellLinkW),
+   allow-listed `ShellExecuteExW` launcher, Win32 process probe,
+   AppController + selftest wiring — task packet
+   `docs/agent-tasks/RW-H-009.md`.
+2. C-CATALOG (RW-C-002): Client catalog list UI with launch lifecycle —
+   task packet `remote-windows-client/docs/agent-tasks/RW-C-002.md`.
 
 Done:
 
+- H-CATALOG: portable catalog + launch services (RW-H-008) — DONE
+  2026-11-25 (branch `agent/H-CATALOG/RW-H008`; integrated at `c3891c1`
+  + review fix `d342bb3`; 143/143 macOS ctest; Windows runner
+  `unit-tests` 146/146 + `selftest` selftest_ok @ `d342bb3`, evidence in
+  the tables above). Win32 adapters + app wiring = follow-up RW-H-009.
 - H-MEDIA: portable media core (RW-H-007) — DONE 2026-11-24
   (branch `agent/H-MEDIA/RW-H-007`; `media/` library: §9.4 framing,
   §9.3 key derivation with the golden `key-derivation.json` reproduced
