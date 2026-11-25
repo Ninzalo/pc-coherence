@@ -7,7 +7,20 @@
 
 #include <cwchar>
 
+#include <objbase.h>   // CoInitializeEx / CoCreateInstance
+#include <rpc.h>       // RPC_E_CHANGED_MODE (WIN32_LEAN_AND_MEAN skips it)
+#include <shlobj.h>    // SLGP_* GetPath flags
+#include <shobjidl.h>  // IShellLinkW, CLSID_ShellLink
 #include <shellapi.h>  // SHELLEXECUTEINFOW / ShellExecuteExW
+
+// SDK 10.0.26100 note (plan rule 2, verified against the actual MSVC
+// diagnostics on the runner): SLGP_LONGPATH is a documented Microsoft
+// SLGP flag that this SDK's <shlobj.h> does NOT declare under this
+// project's WINVER/_WIN32_WINNT pins — defined locally with #ifndef so
+// a future SDK that declares it wins.
+#ifndef SLGP_LONGPATH
+#define SLGP_LONGPATH 0x00000020
+#endif
 
 namespace remotewindows::win32 {
 
@@ -100,6 +113,61 @@ core::LaunchOutcome Win32Launcher::launch(const core::LaunchRequest& req) {
   if (!under_root) {
     return {false, "unauthorized",
             "Launch target is not an allow-listed shortcut", 0};
+  }
+
+  // --- resolve the shortcut BEFORE executing (never let the shell
+  // resolve a broken target): ShellExecuteExW on a .lnk whose target is
+  // gone can block indefinitely in a headless session-0 context
+  // (observed on the 24H2 runner, 2026-11-25 — the per-test 300 s
+  // ctest timeout fired). GetPath itself is fast: a missing-target
+  // shortcut returns its stored path (verified: the StartMenuSource
+  // missing-target fixture scans in milliseconds).
+  std::wstring resolved;
+  {
+    const HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    const bool com_here = SUCCEEDED(hr);
+    if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) {
+      // COM down: the shortcut cannot be verified to resolve.
+      return {false, "launch_failed",
+              "The application could not be started", 0};
+    }
+    IShellLinkW* link = nullptr;
+    if (CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER,
+                         IID_IShellLinkW,
+                         reinterpret_cast<void**>(&link)) == S_OK &&
+        link) {
+      IPersistFile* file = nullptr;
+      if (SUCCEEDED(link->QueryInterface(IID_IPersistFile,
+                                         reinterpret_cast<void**>(&file))) &&
+          file) {
+        if (SUCCEEDED(file->Load(target.c_str(), STGM_READ))) {
+          WCHAR buf[MAX_PATH] = {};
+          // GetPath returns S_FALSE (SUCCEEDED!) with an empty buffer on
+          // failure; the empty-buffer check is the real gate.
+          if (SUCCEEDED(link->GetPath(
+                  buf, MAX_PATH, nullptr, SLGP_UNCPRIORITY | SLGP_LONGPATH)) &&
+              buf[0] != 0)
+            resolved = buf;
+        }
+        file->Release();
+      }
+      link->Release();
+    }
+    if (com_here) CoUninitialize();
+  }
+  if (resolved.empty()) {
+    // The shortcut no longer resolves to anything.
+    return {false, "launch_failed", "The launch target no longer exists", 0};
+  }
+  {
+    // URI targets (ms-appx:/ms-app:// etc.): no filesystem existence
+    // check — app-model activation happens at execute time (the shell).
+    const size_t scheme = resolved.find(L"://");
+    const bool is_uri = scheme != std::wstring::npos && scheme <= 32;
+    if (!is_uri &&
+        GetFileAttributesW(resolved.c_str()) == INVALID_FILE_ATTRIBUTES) {
+      return {false, "launch_failed", "The launch target no longer exists", 0};
+    }
   }
 
   // --- execute: the shortcut is the unit of launch (FR-02) ---

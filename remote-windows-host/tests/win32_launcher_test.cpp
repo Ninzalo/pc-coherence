@@ -2,12 +2,13 @@
 // RW-H-009: Win32 allow-listed launcher test (FR-02, plan rule 9).
 // Compiled and run ONLY on the Windows runner (MSVC + Windows SDK); on
 // macOS this test is NOT RUN. Includes one REAL launch: a temp .lnk under
-// a temp allowed root pointing at %SystemRoot%\System32\cmd.exe (a plain
-// Win32 image — notepad is a UWP app alias and cannot be launched from
-// the headless session-0 runner context; see cmdPath) — deliberate
-// side effect on the dev runner: cmd opens briefly and the test kills
-// it BY PID (never taskkill /IM). The temp tree is cleaned up after
-// each test.
+// a temp allowed root pointing at %SystemRoot%\System32\msg.exe with
+// arguments "/W *" (see msgPath() for the target selection — notepad is
+// a UWP app alias whose activation never completes from the headless
+// session-0 runner context, and cmd.exe exits on immediate stdin EOF —
+// deliberate side effect on the dev runner: msg waits until the test
+// kills it BY PID (never taskkill /IM). The temp tree is cleaned up
+// after each test.
 
 #if !defined(_WIN32)
 #error "win32_launcher_test.cpp is a Windows-only test (ShellExecuteExW)"
@@ -92,6 +93,36 @@ bool makeLnk(const std::wstring& path, const std::wstring& target,
   return ok;
 }
 
+// makeLnk + command-line arguments (IShellLinkW::SetArguments) — the
+// kill test needs arguments (msg /W *) to make the target process block.
+bool makeLnkArgs(const std::wstring& path, const std::wstring& target,
+                 const std::wstring& arguments,
+                 const std::wstring& description) {
+  IShellLinkW* link = nullptr;
+  if (CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER,
+                       IID_IShellLinkW,
+                       reinterpret_cast<void**>(&link)) != S_OK ||
+      !link)
+    return false;
+  IPersistFile* file = nullptr;
+  bool ok = false;
+  if (SUCCEEDED(link->QueryInterface(IID_IPersistFile,
+                                     reinterpret_cast<void**>(&file))) &&
+      file) {
+    HRESULT hrp = link->SetPath(target.c_str());
+    if (hrp == S_OK) hrp = link->SetArguments(arguments.c_str());
+    const HRESULT hrd =
+        description.empty() ? S_OK : link->SetDescription(description.c_str());
+    const HRESULT hrs = (hrp == S_OK && SUCCEEDED(hrd))
+                            ? file->Save(path.c_str(), TRUE)
+                            : static_cast<HRESULT>(S_FALSE);
+    ok = SUCCEEDED(hrs);
+    file->Release();
+  }
+  link->Release();
+  return ok;
+}
+
 void deleteTree(const std::wstring& dir) {
   WIN32_FIND_DATAW fd{};
   const HANDLE h = FindFirstFileW((dir + L"\\*").c_str(), &fd);
@@ -132,21 +163,36 @@ class TempTree {
   std::wstring base_, user_, all_, outside_;
 };
 
-// A REAL launch target for the kill test: %SystemRoot%\System32\cmd.exe.
-// Target recorded per plan rule 2 (real behavior observed on the runner,
-// 2026-11-25): on Windows 11 24H2, System32\notepad.exe is an App
-// Execution Alias stub for the PACKAGED Notepad. ShellExecuteExW from
-// the headless session-0 (sshd) context hands the activation to the app
-// model, which never completes for a non-interactive session — the launch
-// blocked for hours with no process ever appearing and the whole runner
-// hung. cmd.exe is a plain Win32 image: it starts, gets a real PID +
-// NOCLOSEPROCESS handle, idles on stdin, and is killable — exactly the
-// lifecycle the probe/kill assertions exercise.
 std::wstring cmdPath() {
   wchar_t sr[MAX_PATH] = {};
   if (GetEnvironmentVariableW(L"SystemRoot", sr, MAX_PATH) == 0)
     return {};
   const std::wstring p = std::wstring(sr) + L"\\System32\\cmd.exe";
+  return GetFileAttributesW(p.c_str()) == INVALID_FILE_ATTRIBUTES ? std::wstring{}
+                                                                  : p;
+}
+
+// The REAL launch target for the kill test: %SystemRoot%\System32\msg.exe
+// with arguments "/W *". Target selection recorded per plan rule 2 (real
+// behavior observed on the runner, 2026-11-25):
+//  - notepad: on Windows 11 24H2, System32\notepad.exe is an App
+//    Execution Alias stub for the PACKAGED Notepad. ShellExecuteExW from
+//    the headless session-0 (sshd) context hands the activation to the
+//    app model, which never completes for a non-interactive session —
+//    the launch blocked for hours with no process ever appearing and
+//    the whole runner hung.
+//  - cmd.exe: a plain Win32 image, but shell-launched it inherits the
+//    test process' stdin (EOF under sshd) and exits almost immediately —
+//    racing the liveness assertions and leaving a wait on a stale handle
+//    (observed: WAIT_FAILED on the kill handle, 2026-11-25).
+//  - msg /W *: a plain Win32 image that blocks indefinitely waiting for
+//    a message to arrive: fast start, real PID + NOCLOSEPROCESS handle,
+//    deterministic "alive", no stdin dependency, killable by PID.
+std::wstring msgPath() {
+  wchar_t sr[MAX_PATH] = {};
+  if (GetEnvironmentVariableW(L"SystemRoot", sr, MAX_PATH) == 0)
+    return {};
+  const std::wstring p = std::wstring(sr) + L"\\System32\\msg.exe";
   return GetFileAttributesW(p.c_str()) == INVALID_FILE_ATTRIBUTES ? std::wstring{}
                                                                   : p;
 }
@@ -225,22 +271,20 @@ TEST(Win32Launcher, DeletedTargetIsLaunchFailed) {
 
 TEST(Win32Launcher, RealProcessLaunchProbeAndKill) {
   // REAL launch on the dev runner: temp .lnk (under a temp allowed root)
-  // -> %SystemRoot%\System32\cmd.exe (see cmdPath() for why not notepad
-  // — UWP app-model activation from session 0 never completes).
-  // Deliberate side effect: cmd opens briefly (idle, reading stdin) and
-  // the test kills it by PID.
+  // -> msg.exe /W * (see msgPath() for the target selection).
+  // Deliberate side effect: msg blocks until the test kills it by PID.
   ComInit com;
   ASSERT_TRUE(com.ok());
   TempTree tree;
 
-  // Existence check BEFORE launching: if cmd.exe is missing on the
+  // Existence check BEFORE launching: if msg.exe is missing on the
   // runner, FAIL LOUDLY (NOT RUN reporting is for orchestrators, not
   // tests).
-  const std::wstring cmd = cmdPath();
-  ASSERT_FALSE(cmd.empty()) << "cmd.exe missing on this runner";
+  const std::wstring msg = msgPath();
+  ASSERT_FALSE(msg.empty()) << "msg.exe missing on this runner";
 
-  const std::wstring lnk = tree.user_ + L"\\cmd.lnk";
-  ASSERT_TRUE(makeLnk(lnk, cmd, L"Command Prompt"));
+  const std::wstring lnk = tree.user_ + L"\\msg.lnk";
+  ASSERT_TRUE(makeLnkArgs(lnk, msg, L"/W *", L"Message Wait"));
 
   win32::Win32Launcher launcher({tree.user_});
   win32::Win32ProcessProbe probe;
@@ -249,22 +293,26 @@ TEST(Win32Launcher, RealProcessLaunchProbeAndKill) {
   ASSERT_GT(out.pid, 0u);
   EXPECT_TRUE(out.error_code.empty());
 
-  // Liveness: alive now; dead after TerminateProcess + WaitForSingleObject.
-  // The authoritative check is the launcher-RETAINED handle
-  // (out.process_handle): LaunchService's sweep uses isHandleAlive on the
-  // session's retained handle, and a held HANDLE keeps the process object
-  // alive after exit, so the exit code is always readable — by pid alone a
-  // fully-exited process can be unopenable and the probe stays conservative
-  // (fail -> alive). The kill handle also stays open across the pid check.
+  // Liveness: alive now (msg /W * blocks until killed); dead after
+  // TerminateProcess + wait. The authoritative check is the
+  // launcher-RETAINED handle (out.process_handle): LaunchService's sweep
+  // uses isHandleAlive on the session's retained handle, and a held
+  // HANDLE keeps the process object alive after exit, so the exit code
+  // is always readable — by pid alone a fully-exited process can be
+  // unopenable and the probe stays conservative (fail -> alive). The
+  // retained handle is also the wait object (the product's liveness
+  // path); the separately opened terminate handle is used for the kill
+  // only.
   EXPECT_TRUE(probe.isAlive(out.pid));
   ASSERT_NE(out.process_handle, nullptr);  // NOCLOSEPROCESS handle retained
   EXPECT_TRUE(probe.isHandleAlive(out.process_handle));
   const HANDLE h = OpenProcess(PROCESS_TERMINATE, FALSE, out.pid);
-  ASSERT_NE(h, nullptr);
+  ASSERT_NE(h, (HANDLE)nullptr) << "OpenProcess failed: " << GetLastError();
   ASSERT_TRUE(TerminateProcess(h, 1));
-  EXPECT_EQ(WAIT_OBJECT_0, WaitForSingleObject(h, 10000));
+  EXPECT_EQ(WAIT_OBJECT_0, WaitForSingleObject(out.process_handle, 10000))
+      << "wait on retained handle failed: " << GetLastError();
   EXPECT_FALSE(probe.isHandleAlive(out.process_handle));  // exit 1 != STILL_ACTIVE
-  EXPECT_FALSE(probe.isAlive(out.pid));  // kill handle open: readable too
+  EXPECT_FALSE(probe.isAlive(out.pid));  // retained handle open: readable too
   probe.closeProcessHandle(out.process_handle);  // the session's release path
   CloseHandle(h);
 }

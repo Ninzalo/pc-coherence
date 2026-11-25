@@ -289,9 +289,9 @@ TEST(StartMenuSource, UrlOnlyShortcutSkipped) {
   ASSERT_TRUE(com.ok());
   TempTree tree;
 
-  // URL-only shortcut (SetPath stores a URL target; GetPath with
-  // SLGP_FILESYSTEM fails for it) must NOT appear: web links are not
-  // apps (FR-01).
+  // URL-only shortcut (SetPath stores a URL target) must NOT appear:
+  // the source classifies non-Microsoft-app URI targets (https://, ...)
+  // and skips them — web links are not apps (FR-01).
   const std::wstring web = tree.user_ + L"\\web.lnk";
   ASSERT_TRUE(makeLnk(web, L"https://example.com/", L"Website"));
 

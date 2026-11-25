@@ -98,6 +98,17 @@ bool targetLooksLikeMsUri(const std::wstring& t) {
   return lt.rfind(L"ms-appx:", 0) == 0 || lt.rfind(L"ms-app://", 0) == 0;
 }
 
+// Non-Microsoft-app URI target (https://, ftp://, ...): web links and
+// generic protocol handlers are not apps (FR-01) — skip. A real
+// filesystem path never contains "://"; the scheme must start the
+// string (cap 32 keeps odd targets like "C:\foo://bar" classified as
+// paths).
+bool targetLooksLikeOtherUri(const std::wstring& t) {
+  if (targetLooksLikeMsUri(t)) return false;
+  const size_t i = t.find(L"://");
+  return i != std::wstring::npos && i <= 32;
+}
+
 bool targetAvailable(const std::wstring& target) {
   // ms-appx:/ms-app:// URIs cannot be verified offline; report available
   // (honest per design note) — a launch failure would surface as
@@ -175,39 +186,45 @@ void StartMenuSource::parseLnk(const std::wstring& lnk_path,
   }
 
   WCHAR target[MAX_PATH] = {};
-  // pfd == NULL requires SLGP_UNCPRIORITY (MSDN). SLGP_FILESYSTEM makes
-  // URL-only shortcuts (no filesystem target) fail GetPath so they are
-  // skipped — web links are not apps (FR-01).
+  // pfd == NULL requires SLGP_UNCPRIORITY (MSDN).
+  //
+  // Deliberately NO SLGP_FILESYSTEM: that flag makes GetPath FAIL for
+  // URI targets (ms-appx:/ms-app:// shortcuts — real apps in the Start
+  // Menu), which would silently drop them from the catalog. URI targets
+  // come back as strings and are classified after GetPath: ms-appx:/
+  // ms-app:// are kept (targetAvailable), other schemes are skipped
+  // (web links are not apps, FR-01).
   //
   // SDK 10.0.26100 notes (plan rule 2, verified against the actual MSVC
   // diagnostics on the runner): (a) the C++ IShellLinkW::GetPath takes
   // FOUR arguments (the historical 3-argument form does not exist in
-  // this SDK); (b) SLGP_FILESYSTEM/SLGP_LONGPATH are documented
-  // Microsoft SLGP flags that this SDK's <shlobj.h> does NOT declare
-  // under this project's WINVER/_WIN32_WINNT pins — defined locally
-  // with #ifndef so a future SDK that declares them wins; (c) there is
-  // no FILENORMALIZELONGPATH constant anywhere.
-#ifndef SLGP_FILESYSTEM
-#define SLGP_FILESYSTEM 0x00000010
-#endif
+  // this SDK); (b) SLGP_LONGPATH is a documented Microsoft SLGP flag
+  // that this SDK's <shlobj.h> does NOT declare under this project's
+  // WINVER/_WIN32_WINNT pins — defined locally with #ifndef so a
+  // future SDK that declares it wins; (c) there is no
+  // FILENORMALIZELONGPATH constant anywhere.
 #ifndef SLGP_LONGPATH
 #define SLGP_LONGPATH 0x00000020
 #endif
   const HRESULT hrg =
-      link->GetPath(target, MAX_PATH, nullptr,
-                    SLGP_UNCPRIORITY | SLGP_FILESYSTEM | SLGP_LONGPATH);
+      link->GetPath(target, MAX_PATH, nullptr, SLGP_UNCPRIORITY | SLGP_LONGPATH);
   // GetPath returns S_FALSE (SUCCEEDED!) with an empty buffer on failure;
   // the empty-buffer check is the real gate.
   if (FAILED(hrg) || target[0] == 0) {
     link->Release();
-    return;  // unparseable / URL-only shortcut: skip
+    return;  // unparseable shortcut: skip
+  }
+
+  const std::wstring wtarget(target);
+  if (targetLooksLikeOtherUri(wtarget)) {
+    link->Release();
+    return;  // web link / generic URI: not an app (FR-01)
   }
 
   WCHAR desc[512] = {};
   link->GetDescription(desc, 512);  // best-effort; empty on failure
   link->Release();
 
-  const std::wstring wtarget(target);
   core::CatalogRecord rec;
   rec.display_name = displayName(desc, lnk_path, wtarget);
   if (rec.display_name.empty()) return;  // cannot derive a name: skip
