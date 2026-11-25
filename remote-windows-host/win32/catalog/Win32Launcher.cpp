@@ -105,14 +105,23 @@ core::LaunchOutcome Win32Launcher::launch(const core::LaunchRequest& req) {
             "The application could not be started", 0};
   }
   uint32_t pid = 0;
+  LaunchOutcome out;
+  out.ok = true;
   if (si.hProcess) {
     // Some launches report no process (e.g. some shell-handled targets):
     // pid 0 = unknown, still a success.
     pid = static_cast<uint32_t>(GetProcessId(si.hProcess));
-    // SEE_MASK_NOCLOSEPROCESS: WE own this handle.
-    CloseHandle(si.hProcess);
+    // SEE_MASK_NOCLOSEPROCESS: the session owns this handle now. We
+    // deliberately do NOT CloseHandle it — a retained HANDLE keeps the
+    // process object alive after exit, which is what makes
+    // GetExitCodeProcess-based liveness reliable (Win32ProcessProbe::
+    // isHandleAlive). LaunchService releases it via
+    // ProcessProbe::closeProcessHandle when the session ends or is
+    // replaced by a re-launch.
+    out.process_handle = si.hProcess;
   }
-  return {true, "", "", pid};
+  out.pid = pid;
+  return out;
 }
 
 }  // namespace remotewindows::win32

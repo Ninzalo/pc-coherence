@@ -23,6 +23,17 @@ bool Win32ProcessProbe::isAlive(uint32_t pid) {
   return alive;
 }
 
+bool Win32ProcessProbe::isHandleAlive(void* handle) {
+  if (!handle) return true;  // nothing to check -> conservative
+  DWORD code = 0;
+  if (!GetExitCodeProcess(static_cast<HANDLE>(handle), &code)) return true;
+  return code == STILL_ACTIVE;
+}
+
+void Win32ProcessProbe::closeProcessHandle(void* handle) {
+  if (handle) CloseHandle(static_cast<HANDLE>(handle));
+}
+
 }  // namespace remotewindows::win32
 
 #endif  // _WIN32

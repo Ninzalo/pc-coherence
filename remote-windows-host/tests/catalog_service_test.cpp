@@ -59,14 +59,20 @@ class FakeLauncher : public core::AppLauncher {
   }
 };
 
-// Per-pid liveness table; unknown pids report alive.
+// Per-pid liveness table; unknown pids report alive. handle_alive is
+// consulted by isHandleAlive for non-null handles (null -> conservative
+// alive). closeProcessHandle records what the platform released.
 class FakeProbe : public core::ProcessProbe {
  public:
   std::map<uint32_t, bool> alive;
+  bool handle_alive = false;
+  std::vector<void*> closed_handles;
   bool isAlive(uint32_t pid) override {
     auto it = alive.find(pid);
     return it == alive.end() || it->second;
   }
+  bool isHandleAlive(void* h) override { return h ? handle_alive : true; }
+  void closeProcessHandle(void* h) override { closed_handles.push_back(h); }
 };
 
 void expectUuidFormat(const std::string& u) {
@@ -303,6 +309,57 @@ TEST(LaunchService, SweepReportsDeadProcessOnce) {
 
   // Same session is reported at most once.
   EXPECT_TRUE(fx.launch.sweep().empty());
+}
+
+TEST(LaunchService, SweepUsesRetainedHandleWhenPidIsBlind) {
+  // The pid probe cannot see this process (reports alive — on Windows
+  // that is what a reaped process actually looks like), but the retained
+  // handle can see it exited. The handle path must be authoritative:
+  // CLOSED is emitted even though isAlive(pid) says alive, and the
+  // session's handle is released once.
+  LaunchFixture fx;
+  char fake_handle = 'h';  // stands in for a platform process handle
+  fx.launcher.next = core::LaunchOutcome{true, "", "", 4242, &fake_handle};
+  const auto res = fx.launch.handleLaunch(fx.app.app_id);
+  ASSERT_TRUE(res.application_session_id.has_value());
+  EXPECT_EQ(fx.launch.sessions().at(fx.app.app_id).process_handle,
+            static_cast<void*>(&fake_handle));
+
+  fx.probe.alive[4242] = true;    // pid path: alive (blind)
+  fx.probe.handle_alive = true;   // handle path: alive
+  EXPECT_TRUE(fx.launch.sweep().empty());
+
+  fx.probe.handle_alive = false;  // process exited; pid still blind
+  auto events = fx.launch.sweep();
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0].app_id, fx.app.app_id);
+  EXPECT_EQ(events[0].state, proto::AppRunState::CLOSED);
+  EXPECT_EQ(events[0].application_session_id, *res.application_session_id);
+  // The released handle is recorded exactly once; the session retains
+  // nothing afterwards (no double release on a re-sweep).
+  EXPECT_EQ(fx.probe.closed_handles, (std::vector<void*>{&fake_handle}));
+  EXPECT_EQ(fx.launch.sessions().at(fx.app.app_id).process_handle,
+            static_cast<void*>(nullptr));
+  EXPECT_TRUE(fx.launch.sweep().empty());
+}
+
+TEST(LaunchService, RelaunchReleasesSupersededHandle) {
+  LaunchFixture fx;
+  char h1 = '1', h2 = '2';  // stand in for platform process handles
+  fx.launcher.next = core::LaunchOutcome{true, "", "", 4242, &h1};
+  const auto r1 = fx.launch.handleLaunch(fx.app.app_id);
+  ASSERT_TRUE(r1.application_session_id.has_value());
+
+  fx.launcher.next = core::LaunchOutcome{true, "", "", 4242, &h2};
+  const auto r2 = fx.launch.handleLaunch(fx.app.app_id);
+  ASSERT_TRUE(r2.application_session_id.has_value());
+  EXPECT_NE(*r1.application_session_id, *r2.application_session_id);
+
+  // The re-launch releases the superseded session's handle (the old
+  // process may still be running) and retains only the new one.
+  const auto s = fx.launch.sessions().at(fx.app.app_id);
+  EXPECT_EQ(s.process_handle, static_cast<void*>(&h2));
+  EXPECT_EQ(fx.probe.closed_handles, (std::vector<void*>{&h1}));
 }
 
 TEST(LaunchService, RelaunchReplacesSession) {

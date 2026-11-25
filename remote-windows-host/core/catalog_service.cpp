@@ -130,10 +130,16 @@ protocol::LaunchResult LaunchService::handleLaunch(const std::string& app_id) {
   sess.application_session_id = makeUuid();
   sess.state = protocol::LaunchState::STARTED;
   sess.pid = out.pid;
+  sess.process_handle = out.process_handle;
   sess.started_ms = now_ms_ ? now_ms_() : 0;
   const std::string session_id = sess.application_session_id;
   {
     std::lock_guard<std::mutex> lk(mu_);
+    const auto it = sessions_.find(app_id);
+    if (it != sessions_.end() && it->second.process_handle && probe_)
+      // Re-launch: release the superseded session's retained handle so
+      // it cannot leak (the old process may still be running).
+      probe_->closeProcessHandle(it->second.process_handle);
     sessions_[app_id] = std::move(sess);  // re-launch replaces the record
   }
 
@@ -148,9 +154,20 @@ std::vector<protocol::AppStatus> LaunchService::sweep() {
   std::vector<protocol::AppStatus> out;
   std::lock_guard<std::mutex> lk(mu_);
   for (auto& [app_id, sess] : sessions_) {
-    if (sess.closed || sess.pid == 0)
+    if (sess.closed || (sess.pid == 0 && sess.process_handle == nullptr))
       continue;  // already reported, or liveness unknown
-    if (probe_ && !probe_->isAlive(sess.pid)) {
+    bool alive = true;
+    if (probe_) {
+      // A retained handle is the authoritative check: by pid alone a
+      // naturally exited process can be unopenable (false alive) and a
+      // reused pid can look dead (false CLOSED).
+      alive = sess.process_handle ? probe_->isHandleAlive(sess.process_handle)
+                                  : probe_->isAlive(sess.pid);
+    }
+    if (!alive) {
+      if (sess.process_handle && probe_)
+        probe_->closeProcessHandle(sess.process_handle);
+      sess.process_handle = nullptr;
       sess.closed = true;
       protocol::AppStatus st;
       st.app_id = sess.app_id;

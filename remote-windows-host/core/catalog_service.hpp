@@ -79,6 +79,13 @@ struct LaunchOutcome {
   std::string error_code;    // "" on success; e.g. "launch_failed"
   std::string safe_message;  // stable, user-safe; no paths, no OS raw errors
   uint32_t pid = 0;          // 0 = unknown
+  // Platform process handle retained by LaunchService for reliable
+  // liveness (Win32: HANDLE from ShellExecuteExW with
+  // SEE_MASK_NOCLOSEPROCESS). Ownership passes to the session; the
+  // platform releases it via ProcessProbe::closeProcessHandle when the
+  // session ends or is replaced. nullptr = unavailable (liveness falls
+  // back to the pid probe).
+  void* process_handle = nullptr;
 };
 
 // Win32 implementation (ShellExecuteExW) = RW-H-009; tests use a fake.
@@ -92,7 +99,20 @@ class AppLauncher {
 class ProcessProbe {
  public:
   virtual ~ProcessProbe() = default;
+  // Liveness by pid. Implementations must not report "dead" when the
+  // open/query fails (conservative: an access-restricted running
+  // process must not produce a false CLOSED).
   virtual bool isAlive(uint32_t pid) = 0;
+  // Liveness by a retained platform handle (LaunchOutcome::
+  // process_handle). On Win32 the retained HANDLE keeps the process
+  // object alive after termination, so GetExitCodeProcess detects a
+  // natural exit reliably (by pid alone a reaped process is
+  // unopenable -> false alive, and a reused pid can look dead -> false
+  // CLOSED). Default: unverifiable -> alive (never a false CLOSED).
+  virtual bool isHandleAlive(void* /*handle*/) { return true; }
+  // Releases a handle a launcher reported; no-op when the platform
+  // has nothing to release.
+  virtual void closeProcessHandle(void* /*handle*/) {}
 };
 
 struct LaunchSession {
@@ -100,6 +120,7 @@ struct LaunchSession {
   std::string application_session_id;  // makeUuid()
   protocol::LaunchState state = protocol::LaunchState::UNSPECIFIED;
   uint32_t pid = 0;
+  void* process_handle = nullptr;  // see LaunchOutcome::process_handle
   uint64_t started_ms = 0;
   // Dead-process transition already reported via app_status. (The wire
   // LaunchState has no CLOSED value — app_status carries the

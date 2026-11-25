@@ -234,14 +234,21 @@ TEST(Win32Launcher, RealNotepadLaunchProbeAndKill) {
   EXPECT_TRUE(out.error_code.empty());
 
   // Liveness: alive now; dead after TerminateProcess + WaitForSingleObject.
-  // The kill handle stays open across the dead check so the process object
-  // is still openable (a fully-exited process with no remaining handles is
-  // unopenable, and the probe is conservative — fail -> alive).
+  // The authoritative check is the launcher-RETAINED handle
+  // (out.process_handle): LaunchService's sweep uses isHandleAlive on the
+  // session's retained handle, and a held HANDLE keeps the process object
+  // alive after exit, so the exit code is always readable — by pid alone a
+  // fully-exited process can be unopenable and the probe stays conservative
+  // (fail -> alive). The kill handle also stays open across the pid check.
   EXPECT_TRUE(probe.isAlive(out.pid));
+  ASSERT_NE(out.process_handle, nullptr);  // NOCLOSEPROCESS handle retained
+  EXPECT_TRUE(probe.isHandleAlive(out.process_handle));
   const HANDLE h = OpenProcess(PROCESS_TERMINATE, FALSE, out.pid);
   ASSERT_NE(h, nullptr);
   ASSERT_TRUE(TerminateProcess(h, 1));
   EXPECT_EQ(WAIT_OBJECT_0, WaitForSingleObject(h, 10000));
-  EXPECT_FALSE(probe.isAlive(out.pid));  // exit code 1 != STILL_ACTIVE
+  EXPECT_FALSE(probe.isHandleAlive(out.process_handle));  // exit 1 != STILL_ACTIVE
+  EXPECT_FALSE(probe.isAlive(out.pid));  // kill handle open: readable too
+  probe.closeProcessHandle(out.process_handle);  // the session's release path
   CloseHandle(h);
 }

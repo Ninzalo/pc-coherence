@@ -21,10 +21,18 @@ namespace remotewindows::win32 {
 // the packet; access failure is indistinguishable from a running process
 // we cannot query). Otherwise GetExitCodeProcess: STILL_ACTIVE -> alive,
 // anything else -> dead. The handle is always closed. pid 0 is never
-// passed by LaunchService (sweep skips pid==0 sessions).
+// passed by LaunchService (sweep skips sessions without liveness data).
+//
+// isHandleAlive(held): the authoritative check. The held HANDLE keeps the
+// process object alive after termination, so GetExitCodeProcess reports
+// the real exit code of a naturally exited process (by pid alone such a
+// process is unopenable -> false alive, and a reused pid can look dead ->
+// false CLOSED). GetExitCodeProcess failure -> conservative alive.
 class Win32ProcessProbe : public core::ProcessProbe {
  public:
   bool isAlive(uint32_t pid) override;
+  bool isHandleAlive(void* handle) override;
+  void closeProcessHandle(void* handle) override;
 };
 
 }  // namespace remotewindows::win32
