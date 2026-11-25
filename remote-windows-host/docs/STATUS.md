@@ -7,7 +7,9 @@ and root-caused, ctest per-test timeout + 25-min watchdog added, and
 launch/scan correctness fixes (pre-resolve .lnk targets, no
 `SLGP_FILESYSTEM` in the Start Menu scan, ms-appx URI fixtures that do not
 persist on 24H2). macOS 145/145. RW-H-008: 143/143 macOS + Windows runner
-146/146 @ `d342bb3`; see "Implemented and verified" below).
+146/146 @ `d342bb3`; see "Implemented and verified" below. Client C-MEDIA
+(RW-C-003) media channel merged into main at `c5320e3` on 2026-11-25
+(client `docs/STATUS.md`); the host tree was unchanged by that merge).
 
 ## Implemented and verified
 
@@ -321,24 +323,26 @@ Windows runner (DESKTOP-PC), 2026-11-24:
 
 ## Next tasks
 
-1. C-MEDIA (Client): media-channel receiver — TCP 47988 client with the
-   §9.2 handshake (CryptoKit HMAC-SHA256 + session-key derivation), §9.4
-   framing, per-stream AES-256-GCM open (must reproduce the golden
-   vectors in `Protocol/Contract/test-vectors/media/`), VideoToolbox
-   H.264 decode + per-window rendering — task packet
-   `remote-windows-client/docs/agent-tasks/RW-C-003.md` (written,
-   committed `7bb5687`; dependency gate satisfied: host media core
-   RW-H-007/008 done, client catalog RW-C-002 done).
-2. C-INPUT (Client, after C-MEDIA per the plan dependency graph): FR-08
-   shortcut adaptation stack — task packet
+1. C-INPUT (Client): FR-08 shortcut adaptation stack — task packet
    `remote-windows-client/docs/agent-tasks/RW-C-004.md` (written,
    committed `7bb5687`; input-pipeline integration is scoped out of the
    packet — it needs C-WINDOWS/H-INPUT).
-3. H-WINDOWS / H-MEDIA (Host): Win32 WGC capture + window registry/events
+2. H-WINDOWS / H-MEDIA (Host): Win32 WGC capture + window registry/events
    (the next host track; no packet yet — to be written when dispatched).
 
 Done:
 
+- C-MEDIA: macOS Client media channel (RW-C-003) — DONE 2026-11-25
+  (branch `agent/C-PERF/RW-C003`; merged into main at `c5320e3`,
+  fast-forward from `275eb09`): TCP 47988 client with the §9.2
+  handshake, §9.4 framing, §9.3 key derivation, per-stream AES-256-GCM
+  (CryptoKit — the golden `key-derivation.json` and `aes-256-gcm.json`
+  vectors in `Protocol/Contract/test-vectors/media/` reproduced
+  byte-exact), VideoToolbox H.264 decode into a real CAMetalLayer
+  NSWindow per `window_id`; 369/369 Swift checks on main (250 baseline
+  + 119 new, exit 0). NOT RUN (headless): decoded pixel output. Known
+  limitation: no media-channel auto-reconnect after a §9.6 failure
+  (teardown until re-pairing).
 - H-CATALOG: Win32 catalog + launch adapters + app wiring (RW-H-009) —
   DONE 2026-11-25 (branch `agent/H-CATALOG/RW-H009`; integrated at
   `e2c6f85`/`94c712c` + held-handle review fix `7f1b344` + runner
