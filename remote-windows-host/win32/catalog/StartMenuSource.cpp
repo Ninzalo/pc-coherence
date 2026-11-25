@@ -5,13 +5,11 @@
 
 #include "app/Win32Env.hpp"  // <windows.h> pin + SDK macro undefs
 
-#include <cctype>  // std::towlower (not pulled in transitively by MSVC)
 #include <cwchar>
 
 #include <objbase.h>  // CoInitializeEx / CoCreateInstance
 #include <rpc.h>      // RPC_E_CHANGED_MODE (WIN32_LEAN_AND_MEAN skips it)
-#include <shlobj.h>   // SLGP_* GetPath flags (SLGP_FILESYSTEM / SLGP_LONGPATH
-                     // live here, not in shellapi.h)
+#include <shlobj.h>   // SLGP_UNCPRIORITY GetPath flag
 #include <shobjidl.h>  // IShellLinkW, CLSID_ShellLink
 
 namespace remotewindows::win32 {
@@ -20,8 +18,18 @@ namespace {
 
 constexpr int kMaxDepth = 10;  // Start Menu nesting cap (design note)
 
+// Deterministic ASCII-only fold. std::towlower is NOT in std under
+// MSVC 14.51 even with <cctype>/<cwchar> included (verified by the
+// runner's MSVC diagnostics; plan rule 2) — and the C locale folds
+// exactly this range, so behavior is unchanged.
+wchar_t foldLower(wchar_t c) {
+  return (c >= L'A' && c <= L'Z')
+             ? static_cast<wchar_t>(c + (L'a' - L'A'))
+             : c;
+}
+
 std::wstring toLower(std::wstring s) {
-  for (auto& c : s) c = (wchar_t)std::towlower(c);
+  for (auto& c : s) c = foldLower(c);
   return s;
 }
 
@@ -169,20 +177,25 @@ void StartMenuSource::parseLnk(const std::wstring& lnk_path,
   WCHAR target[MAX_PATH] = {};
   // pfd == NULL requires SLGP_UNCPRIORITY (MSDN). SLGP_FILESYSTEM makes
   // URL-only shortcuts (no filesystem target) fail GetPath so they are
-  // skipped — web links are not apps (FR-01). SDK 10.0.26100 note (plan
-  // rule 2, verified against the actual MSVC diagnostics): the C++
-  // IShellLinkW::GetPath takes FOUR arguments (the historical 3-argument
-  // form does not exist in this SDK) and SLGP_FILESYSTEM/SLGP_LONGPATH
-  // are declared in <shlobj.h> (SLGP_LONGPATH since SDK 10.0.22621);
-  // there is no FILENORMALIZELONGPATH constant anywhere.
-  HRESULT hrg;
-#if defined(SLGP_LONGPATH)
-  hrg = link->GetPath(target, MAX_PATH, nullptr,
-                      SLGP_UNCPRIORITY | SLGP_FILESYSTEM | SLGP_LONGPATH);
-#else
-  hrg = link->GetPath(target, MAX_PATH, nullptr,
-                      SLGP_UNCPRIORITY | SLGP_FILESYSTEM);
+  // skipped — web links are not apps (FR-01).
+  //
+  // SDK 10.0.26100 notes (plan rule 2, verified against the actual MSVC
+  // diagnostics on the runner): (a) the C++ IShellLinkW::GetPath takes
+  // FOUR arguments (the historical 3-argument form does not exist in
+  // this SDK); (b) SLGP_FILESYSTEM/SLGP_LONGPATH are documented
+  // Microsoft SLGP flags that this SDK's <shlobj.h> does NOT declare
+  // under this project's WINVER/_WIN32_WINNT pins — defined locally
+  // with #ifndef so a future SDK that declares them wins; (c) there is
+  // no FILENORMALIZELONGPATH constant anywhere.
+#ifndef SLGP_FILESYSTEM
+#define SLGP_FILESYSTEM 0x00000010
 #endif
+#ifndef SLGP_LONGPATH
+#define SLGP_LONGPATH 0x00000020
+#endif
+  const HRESULT hrg =
+      link->GetPath(target, MAX_PATH, nullptr,
+                    SLGP_UNCPRIORITY | SLGP_FILESYSTEM | SLGP_LONGPATH);
   // GetPath returns S_FALSE (SUCCEEDED!) with an empty buffer on failure;
   // the empty-buffer check is the real gate.
   if (FAILED(hrg) || target[0] == 0) {

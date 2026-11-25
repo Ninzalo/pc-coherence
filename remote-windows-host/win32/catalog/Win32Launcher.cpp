@@ -5,7 +5,6 @@
 
 #include "app/Win32Env.hpp"  // <windows.h> pin + SDK macro undefs
 
-#include <cctype>  // std::towlower (not pulled in transitively by MSVC)
 #include <cwchar>
 
 #include <shellapi.h>  // SHELLEXECUTEINFOW / ShellExecuteExW
@@ -14,8 +13,18 @@ namespace remotewindows::win32 {
 
 namespace {
 
+// Deterministic ASCII-only fold. std::towlower is NOT in std under
+// MSVC 14.51 even with <cctype>/<cwchar> included (verified by the
+// runner's MSVC diagnostics; plan rule 2) — and the C locale folds
+// exactly this range, so behavior is unchanged.
+wchar_t foldLower(wchar_t c) {
+  return (c >= L'A' && c <= L'Z')
+             ? static_cast<wchar_t>(c + (L'a' - L'A'))
+             : c;
+}
+
 std::wstring toLower(std::wstring s) {
-  for (auto& c : s) c = (wchar_t)std::towlower(c);
+  for (auto& c : s) c = foldLower(c);
   return s;
 }
 
@@ -36,7 +45,7 @@ std::wstring utf8ToWide(const std::string& s) {
 std::wstring normalizePath(std::wstring p) {
   for (auto& c : p) {
     if (c == L'/') c = L'\\';
-    c = (wchar_t)std::towlower(c);
+    c = foldLower(c);
   }
   while (p.size() > 1 && p.back() == L'\\') p.pop_back();
   return p;
