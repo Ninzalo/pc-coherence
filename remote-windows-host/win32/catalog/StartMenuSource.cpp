@@ -5,10 +5,13 @@
 
 #include "app/Win32Env.hpp"  // <windows.h> pin + SDK macro undefs
 
+#include <cctype>  // std::towlower (not pulled in transitively by MSVC)
 #include <cwchar>
 
 #include <objbase.h>  // CoInitializeEx / CoCreateInstance
 #include <rpc.h>      // RPC_E_CHANGED_MODE (WIN32_LEAN_AND_MEAN skips it)
+#include <shlobj.h>   // SLGP_* GetPath flags (SLGP_FILESYSTEM / SLGP_LONGPATH
+                     // live here, not in shellapi.h)
 #include <shobjidl.h>  // IShellLinkW, CLSID_ShellLink
 
 namespace remotewindows::win32 {
@@ -166,11 +169,12 @@ void StartMenuSource::parseLnk(const std::wstring& lnk_path,
   WCHAR target[MAX_PATH] = {};
   // pfd == NULL requires SLGP_UNCPRIORITY (MSDN). SLGP_FILESYSTEM makes
   // URL-only shortcuts (no filesystem target) fail GetPath so they are
-  // skipped — web links are not apps (FR-01). The packet specifies the
-  // long-path normalization flag; in Windows SDK 10.0.26100 the flag is
-  // SLGP_LONGPATH (shellapi.h, since 10.0.22621) — no
-  // FILENORMALIZELONGPATH constant exists (recorded in the RW-H-009
-  // report, plan rule 2).
+  // skipped — web links are not apps (FR-01). SDK 10.0.26100 note (plan
+  // rule 2, verified against the actual MSVC diagnostics): the C++
+  // IShellLinkW::GetPath takes FOUR arguments (the historical 3-argument
+  // form does not exist in this SDK) and SLGP_FILESYSTEM/SLGP_LONGPATH
+  // are declared in <shlobj.h> (SLGP_LONGPATH since SDK 10.0.22621);
+  // there is no FILENORMALIZELONGPATH constant anywhere.
   HRESULT hrg;
 #if defined(SLGP_LONGPATH)
   hrg = link->GetPath(target, MAX_PATH, nullptr,

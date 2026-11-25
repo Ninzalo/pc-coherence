@@ -5,6 +5,7 @@
 
 #include "app/Win32Env.hpp"  // <windows.h> pin + SDK macro undefs
 
+#include <cctype>  // std::towlower (not pulled in transitively by MSVC)
 #include <cwchar>
 
 #include <shellapi.h>  // SHELLEXECUTEINFOW / ShellExecuteExW
@@ -105,7 +106,7 @@ core::LaunchOutcome Win32Launcher::launch(const core::LaunchRequest& req) {
             "The application could not be started", 0};
   }
   uint32_t pid = 0;
-  LaunchOutcome out;
+  core::LaunchOutcome out;
   out.ok = true;
   if (si.hProcess) {
     // Some launches report no process (e.g. some shell-handled targets):

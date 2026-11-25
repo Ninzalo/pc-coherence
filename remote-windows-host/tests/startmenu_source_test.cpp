@@ -82,8 +82,9 @@ bool makeLnk(const std::wstring& path, const std::wstring& target,
   if (SUCCEEDED(link->QueryInterface(IID_IPersistFile,
                                      reinterpret_cast<void**>(&file))) &&
       file) {
-    // fFlags 0 = plain file/URL path (SLGP_NORMAL).
-    const HRESULT hrp = link->SetPath(target.c_str(), 0);
+    // SDK 10.0.26100 C++ signature: SetPath takes the path only (the
+    // historical WIN32_FIND_DATA* parameter is not part of it).
+    const HRESULT hrp = link->SetPath(target.c_str());
     const HRESULT hrd =
         description.empty() ? S_OK : link->SetDescription(description.c_str());
     const HRESULT hrs = (hrp == S_OK && SUCCEEDED(hrd))
@@ -260,12 +261,27 @@ TEST(StartMenuSource, AppIdsStableAcrossRescans) {
     EXPECT_EQ(s1.entries[i].app_id, s2.entries[i].app_id)
         << "app_id must be stable across rescans";
   // app_id = core::makeAppId(identity_key, launch_target) — derived, not
-  // source-provided.
+  // source-provided. (The wire protocol::AppEntry carries no
+  // launch_target; the expected target is the .lnk path the fixture
+  // created.)
+  const std::string a_id =
+      makeAppId(normalizeIdentity("Stable A"),
+                wideToUtf8(tree.user_ + L"\\a.lnk"));
+  const std::string b_id =
+      makeAppId(normalizeIdentity("Stable B"),
+                wideToUtf8(tree.all_ + L"\\b.lnk"));
+  bool saw_a = false, saw_b = false;
   for (const auto& e : s1.entries) {
-    EXPECT_EQ(e.app_id,
-              makeAppId(normalizeIdentity(e.display_name), e.launch_target));
+    if (e.app_id == a_id)
+      saw_a = true;
+    else if (e.app_id == b_id)
+      saw_b = true;
+    else
+      FAIL() << "unexpected app_id " << e.app_id;
     EXPECT_FALSE(e.app_id.empty());
   }
+  EXPECT_TRUE(saw_a);
+  EXPECT_TRUE(saw_b);
 }
 
 TEST(StartMenuSource, UrlOnlyShortcutSkipped) {

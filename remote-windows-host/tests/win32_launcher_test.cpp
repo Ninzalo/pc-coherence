@@ -75,7 +75,9 @@ bool makeLnk(const std::wstring& path, const std::wstring& target,
   if (SUCCEEDED(link->QueryInterface(IID_IPersistFile,
                                      reinterpret_cast<void**>(&file))) &&
       file) {
-    const HRESULT hrp = link->SetPath(target.c_str(), 0);
+    // SDK 10.0.26100 C++ signature: SetPath takes the path only (the
+    // historical WIN32_FIND_DATA* parameter is not part of it).
+    const HRESULT hrp = link->SetPath(target.c_str());
     const HRESULT hrd =
         description.empty() ? S_OK : link->SetDescription(description.c_str());
     const HRESULT hrs = (hrp == S_OK && SUCCEEDED(hrd))
