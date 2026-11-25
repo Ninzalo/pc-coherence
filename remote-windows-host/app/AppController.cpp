@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <iterator>
 #include <optional>
 #include <string>
 #include <thread>
@@ -12,6 +13,8 @@
 #include "app/Logger.hpp"
 #include "app/SessionAuth.hpp"
 #include "app/TrayController.hpp"
+#include "core/catalog.hpp"
+#include "core/catalog_service.hpp"
 #include "core/pairing.hpp"
 #include "core/protocol_types.hpp"
 #include "network/signaling_client.hpp"
@@ -19,6 +22,9 @@
 
 #ifdef _WIN32
 #include "app/Win32Env.hpp"
+#include "win32/catalog/StartMenuSource.hpp"
+#include "win32/catalog/Win32Launcher.hpp"
+#include "win32/catalog/Win32ProcessProbe.hpp"
 #endif
 
 using namespace remotewindows;
@@ -40,15 +46,20 @@ std::string hostName() {
 
 // Machine-readable selftest report (consumed by the build/test runner).
 // Keys are stable machine-readable English; values never contain secrets.
+// Existing keys must stay (runner contract); RW-H-009 ADDS
+// catalog_entries / launch / launch_unknown only.
 void printSelftest(const remotewindows::app::SelftestResult& res) {
   std::printf("{\"selftest\":true,\"passed\":%s,\"stage\":\"%s\","
               "\"port\":%u,\"reply_kind\":\"%s\",\"envelopes\":%zu,"
               "\"pairing\":\"%s\",\"reply_kinds\":\"%s\","
-              "\"error\":\"%s\"}\n",
+              "\"error\":\"%s\","
+              "\"catalog_entries\":%zu,\"launch\":\"%s\","
+              "\"launch_unknown\":\"%s\"}\n",
               res.passed ? "true" : "false", res.stage.c_str(),
               (unsigned)res.port, res.reply_kind.c_str(), res.envelopes,
               res.pairing.c_str(), res.reply_kinds.c_str(),
-              res.error.c_str());
+              res.error.c_str(), res.catalog_entries, res.launch.c_str(),
+              res.launch_unknown.c_str());
 }
 
 // SignalingServer::Handler is stateless with respect to connections
@@ -58,6 +69,50 @@ void printSelftest(const remotewindows::app::SelftestResult& res) {
 void drainConnectionWorkers() {
   std::this_thread::sleep_for(std::chrono::milliseconds(150));
 }
+
+// RW-H-009 selftest fakes: deterministic, in-memory, NO real processes.
+// The selftest must stay safe on any machine (incl. non-interactive SSH
+// runner sessions) and deterministic for the runner.
+class SelftestCatalogSource : public core::CatalogSource {
+ public:
+  std::vector<core::CatalogRecord> scan() override {
+    // Three synthetic entries with FAKE launch targets (never real paths:
+    // the fake launcher does not execute them).
+    const std::pair<const char*, const char*> apps[] = {
+        {"File Explorer", "fake://selftest/explorer.lnk"},
+        {"Notepad", "fake://selftest/notepad.lnk"},
+        {"Access", "fake://selftest/access.lnk"},
+    };
+    std::vector<core::CatalogRecord> out;
+    out.reserve(std::size(apps));
+    for (const auto& [name, target] : apps) {
+      core::CatalogRecord r;
+      r.display_name = name;
+      r.identity_key = core::normalizeIdentity(name);
+      r.launch_target = target;
+      r.source = "start_menu";
+      r.priority = 10;
+      r.available = true;
+      r.icon_ref = "";
+      r.app_id = core::makeAppId(r.identity_key, r.launch_target);
+      out.push_back(std::move(r));
+    }
+    return out;
+  }
+};
+
+class SelftestLauncher : public core::AppLauncher {
+ public:
+  core::LaunchOutcome launch(const core::LaunchRequest&) override {
+    // Always ok, pid 4242 (deterministic). Never launches anything.
+    return core::LaunchOutcome{true, "", "", 4242};
+  }
+};
+
+class SelftestProbe : public core::ProcessProbe {
+ public:
+  bool isAlive(uint32_t) override { return true; }  // always alive
+};
 
 #ifdef _WIN32
 // One-shot window-creation probe for the runProbeTray bisect: register
@@ -182,7 +237,34 @@ int AppController::runGui(const Options& opts) {
                  err.c_str());
   }
 
+#ifdef _WIN32
+  // RW-H-009: real Win32 catalog + launch services (FR-01/FR-02). The
+  // services are shared across per-connection worker threads (both are
+  // internally synchronized); the handler passes them to every
+  // SessionAuth. Startup scan so the first client catalog request serves
+  // a cached snapshot.
+  win32::StartMenuSource start_menu_source;
+  win32::Win32Launcher launcher;
+  win32::Win32ProcessProbe probe;
+  core::CatalogService catalog(&start_menu_source);
+  core::LaunchService launch(catalog, &launcher, &probe);
+  ControlServices services{&catalog, &launch};
+  // catalog.ready: entry count + revision + duration_ms ONLY — never
+  // names or paths (structured log discipline).
+  const auto t0 = std::chrono::steady_clock::now();
+  const protocol::AppCatalog snap = catalog.snapshot(/*force_rescan=*/true);
+  const auto t1 = std::chrono::steady_clock::now();
+  log.write(LogLevel::Info, "catalog.ready",
+            {{"entries", std::to_string(snap.entries.size())},
+             {"revision", std::to_string(snap.catalog_revision)},
+             {"duration_ms",
+              std::to_string(std::chrono::duration_cast<
+                                 std::chrono::milliseconds>(t1 - t0)
+                                 .count())}});
+  SignalingSessionHandler handler(hostName(), &log, &services);
+#else
   SignalingSessionHandler handler(hostName(), &log);
+#endif
   net::SignalingServer server(&handler);
   const std::string addr = opts.addr.empty() ? "0.0.0.0" : opts.addr;
   if (!server.start(addr, opts.port, err)) {
@@ -386,8 +468,21 @@ int AppController::runSelftest(const Options& opts) {
 
   SelftestResult res;
   res.pairing = "none";
+  // RW-H-009 report defaults: the launch exchange was not reached.
+  res.launch = "none";
+  res.launch_unknown = "missed";
 
-  SignalingSessionHandler handler(hostName(), &log);
+  // RW-H-009: fake-backed catalog + launch services. Deterministic and
+  // side-effect-free: the selftest NEVER launches a real process (it must
+  // stay safe on any machine, incl. non-interactive SSH runner sessions).
+  SelftestCatalogSource fake_source;
+  SelftestLauncher fake_launcher;
+  SelftestProbe fake_probe;
+  core::CatalogService catalog(&fake_source);
+  core::LaunchService launch(catalog, &fake_launcher, &fake_probe);
+  ControlServices services{&catalog, &launch};
+
+  SignalingSessionHandler handler(hostName(), &log, &services);
   net::SignalingServer server(&handler);
   if (!server.start("127.0.0.1", opts.port, err)) {
     res.stage = "start";
@@ -512,12 +607,13 @@ int AppController::runSelftest(const Options& opts) {
           }
         }
 
-        // 7. APP_CATALOG: empty entries (honest placeholder; the catalog
-        //    scanner is a later task).
+        // 7. APP_CATALOG: exactly the 3 fake-backed entries (RW-H-009;
+        //    the catalog service is real, the source is a fake).
         if (r4) {
           if (const auto* cat =
                   std::get_if<protocol::AppCatalog>(&r4->payload)) {
-            if (cat->entries.empty() &&
+            res.catalog_entries = cat->entries.size();
+            if (cat->entries.size() == 3 &&
                 r4->request_id.value_or(0) == 1u) {
               res.passed = true;
             } else {
@@ -527,6 +623,76 @@ int AppController::runSelftest(const Options& opts) {
           } else {
             res.stage = "exchange";
             res.error = "app_catalog bad payload";
+          }
+        }
+
+        // 8. LAUNCH_APP (first catalog entry) -> LAUNCH_RESULT started +
+        //    non-empty application_session_id (PROTOCOL §5: session id
+        //    present when state is started).
+        if (res.passed) {
+          const auto first_id =
+              std::get_if<protocol::AppCatalog>(&r4->payload)
+                  ->entries.front()
+                  .app_id;
+          protocol::Envelope lreq;
+          lreq.kind = "launch_app";
+          lreq.request_id = 2;
+          protocol::LaunchApp la;
+          la.app_id = first_id;  // app_id only — never paths/commands
+          lreq.payload = la;
+          std::optional<protocol::Envelope> r5;
+          if (client.sendEnvelope(lreq, err))
+            r5 = expect("launch_result");
+          else {
+            res.stage = "exchange";
+            res.error = err;
+          }
+          if (r5) {
+            const auto* lr =
+                std::get_if<protocol::LaunchResult>(&r5->payload);
+            if (lr && lr->state == protocol::LaunchState::STARTED &&
+                lr->app_id == first_id &&
+                lr->application_session_id.has_value() &&
+                !lr->application_session_id->empty()) {
+              res.launch = "started";
+            } else {
+              res.launch = "failed";
+              res.stage = "exchange";
+              res.error = "launch_result unexpected (want started + "
+                          "application_session_id)";
+            }
+          }
+        }
+
+        // 9. LAUNCH_APP(unknown app_id) -> LAUNCH_RESULT failed +
+        //    error_code unknown_app_id (allow-list gate; the launcher is
+        //    never called for unknown ids).
+        if (res.passed) {
+          protocol::Envelope ureq;
+          ureq.kind = "launch_app";
+          ureq.request_id = 3;
+          protocol::LaunchApp la;
+          la.app_id = "app-nope";
+          ureq.payload = la;
+          std::optional<protocol::Envelope> r6;
+          if (client.sendEnvelope(ureq, err))
+            r6 = expect("launch_result");
+          else {
+            res.stage = "exchange";
+            res.error = err;
+          }
+          if (r6) {
+            const auto* lr =
+                std::get_if<protocol::LaunchResult>(&r6->payload);
+            if (lr && lr->state == protocol::LaunchState::FAILED &&
+                lr->app_id == "app-nope" &&
+                lr->error_code == "unknown_app_id") {
+              res.launch_unknown = "rejected";
+            } else {
+              res.stage = "exchange";
+              res.error = "unknown-app launch_result unexpected (want "
+                          "failed + unknown_app_id)";
+            }
           }
         }
       } else {
@@ -541,6 +707,10 @@ int AppController::runSelftest(const Options& opts) {
   }
 
   res.envelopes = server.envelopesReceived();
+  // RW-H-009: pass requires the pre-existing conditions AND the
+  // fake-backed catalog + launch exchange.
+  res.passed = res.passed && res.catalog_entries == 3 &&
+               res.launch == "started" && res.launch_unknown == "rejected";
   server.stop();
   drainConnectionWorkers();
   if (res.passed) {

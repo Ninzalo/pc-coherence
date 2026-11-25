@@ -9,8 +9,10 @@
 //
 // The pairing handshake is fully wired: HELLO -> HELLO +
 // PAIRING_CHALLENGE -> PAIRING (code + nonce echo) -> PAIRING_RESULT,
-// then a minimal post-pairing control exchange (empty catalog). Catalog
-// scanning and real control routing are later tasks (H-CATALOG et al.).
+// then the post-pairing control exchange. RW-H-009 wires the real Win32
+// catalog + launch services into the GUI app (Start Menu source,
+// allow-listed ShellExecuteExW launcher, OpenProcess probe) and extends
+// the selftest with a fake-backed catalog + launch exchange.
 
 #include <cstddef>
 #include <cstdint>
@@ -39,6 +41,11 @@ struct SelftestResult {
   // RW-H-004: full-handshake report fields (machine-readable English).
   std::string pairing;    // "none" | "accepted" | "rejected"
   std::string reply_kinds;  // ';'-joined reply kinds in arrival order
+  // RW-H-009: fake-backed catalog + launch exchange report fields.
+  // The selftest NEVER launches a real process (in-memory fakes only).
+  std::size_t catalog_entries = 0;  // entries in the received app_catalog
+  std::string launch;          // "none" | "started" | "failed"
+  std::string launch_unknown;  // "missed" | "rejected"
 };
 
 class AppController {
@@ -49,8 +56,10 @@ class AppController {
   // signaling server on 127.0.0.1:<port>, performs the full pairing
   // handshake with an in-process client (HELLO -> HELLO ->
   // PAIRING_CHALLENGE -> PAIRING_RESULT(accepted) -> APP_CATALOG_REQUEST
-  // -> APP_CATALOG(empty)), prints a machine-readable JSON report to
-  // stdout. Returns 0 on pass.
+  // -> APP_CATALOG(3 fake-backed entries) -> LAUNCH_APP(started) ->
+  // LAUNCH_APP(unknown_app_id)), prints a machine-readable JSON report
+  // to stdout. Returns 0 on pass. The catalog/launch services are backed
+  // by in-memory fakes — the selftest NEVER launches a real process.
   int runSelftest(const Options& opts);
   // Diagnostic (tray-exit investigation 2026-11-24): walk the real
   // GUI-init sequence (logger, session handler, signaling server,
