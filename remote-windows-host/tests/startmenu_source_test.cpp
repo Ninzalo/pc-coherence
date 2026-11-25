@@ -21,6 +21,7 @@
 
 #include <objbase.h>  // CoInitializeEx / CoCreateInstance
 #include <rpc.h>      // RPC_E_CHANGED_MODE (WIN32_LEAN_AND_MEAN skips it)
+#include <shlobj.h>   // SLGP_UNCPRIORITY GetPath flag
 #include <shobjidl.h>  // IShellLinkW, CLSID_ShellLink
 
 #include "core/catalog.hpp"
@@ -150,6 +151,38 @@ std::wstring notepadPath() {
                                                                   : p;
 }
 
+// True if the .lnk's target is NOT retrievable via IShellLinkW::GetPath
+// (Load failed, or GetPath failed / empty buffer).
+// Plan rule 2 (probed on the 24H2 runner, 2026-11-25, via WScript.Shell
+// AND the C++ fixture path): URI targets set through SetPath do NOT
+// persist on Windows 11 24H2 — the shortcut saves cleanly but GetPath
+// returns an empty target on reload.
+bool fixtureTargetEmpty(const std::wstring& lnk_path) {
+  IShellLinkW* link = nullptr;
+  if (CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER,
+                       IID_IShellLinkW,
+                       reinterpret_cast<void**>(&link)) != S_OK ||
+      !link)
+    return false;  // COM down: do not claim the premise
+  bool empty = false;
+  IPersistFile* file = nullptr;
+  if (SUCCEEDED(link->QueryInterface(IID_IPersistFile,
+                                     reinterpret_cast<void**>(&file))) &&
+      file) {
+    if (SUCCEEDED(file->Load(lnk_path.c_str(), STGM_READ))) {
+      WCHAR buf[MAX_PATH] = {};
+      const HRESULT hr =
+          link->GetPath(buf, MAX_PATH, nullptr, SLGP_UNCPRIORITY);
+      empty = FAILED(hr) || buf[0] == 0;
+    } else {
+      empty = true;  // Load failed: nothing retrievable
+    }
+    file->Release();
+  }
+  link->Release();
+  return empty;
+}
+
 const core::CatalogRecord* findByLnk(const std::vector<core::CatalogRecord>& recs,
                                      const std::wstring& lnk_path) {
   const std::string u = wideToUtf8(lnk_path);
@@ -206,10 +239,22 @@ TEST(StartMenuSource, DisplayNameFallbacksAndAvailability) {
   EXPECT_EQ(r->display_name, "Gone App");
   EXPECT_FALSE(r->available);
 
+  // ms-appx: URI target. On an OS where the URI persists, the record
+  // must appear (display name from the description, available = true —
+  // cannot be verified offline, honest per design). On Windows 11 24H2
+  // (plan rule 2, probed 2026-11-25) URI targets set via SetPath do NOT
+  // persist — GetPath is empty on reload, so the source correctly
+  // skips the shortcut as unparseable; in that case verify the premise
+  // instead (if the target IS retrievable, a missing record is a
+  // regression).
   r = findByLnk(recs, msuri);
-  ASSERT_NE(r, nullptr) << "msuri.lnk not parsed";
-  EXPECT_EQ(r->display_name, "Edge URI");
-  EXPECT_TRUE(r->available);
+  if (r == nullptr) {
+    ASSERT_TRUE(fixtureTargetEmpty(msuri))
+        << "msuri.lnk target is retrievable yet produced no record";
+  } else {
+    EXPECT_EQ(r->display_name, "Edge URI");
+    EXPECT_TRUE(r->available);
+  }
 }
 
 TEST(StartMenuSource, CrossRootDedupeToOneRecord) {
@@ -289,9 +334,12 @@ TEST(StartMenuSource, UrlOnlyShortcutSkipped) {
   ASSERT_TRUE(com.ok());
   TempTree tree;
 
-  // URL-only shortcut (SetPath stores a URL target) must NOT appear:
-  // the source classifies non-Microsoft-app URI targets (https://, ...)
-  // and skips them — web links are not apps (FR-01).
+  // URL-only shortcut (SetPath stores a URL target) must NOT appear.
+  // Two OS-dependent skip paths both hold: (a) on Windows 11 24H2 the
+  // URI does not persist — GetPath is empty on reload, so the source
+  // skips it as unparseable (plan rule 2, probed 2026-11-25); (b) where
+  // the URI DOES persist, the source classifies non-Microsoft-app URI
+  // targets and skips them — web links are not apps (FR-01).
   const std::wstring web = tree.user_ + L"\\web.lnk";
   ASSERT_TRUE(makeLnk(web, L"https://example.com/", L"Website"));
 
