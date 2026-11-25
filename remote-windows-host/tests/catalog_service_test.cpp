@@ -172,12 +172,12 @@ TEST(CatalogService, FindHitAndMiss) {
   src.records = {np};
   core::CatalogService svc(&src);
   svc.snapshot();
-  const core::CatalogRecord* hit = svc.find(np.app_id);
-  ASSERT_NE(hit, nullptr);
+  const auto hit = svc.find(np.app_id);
+  ASSERT_TRUE(hit.has_value());
   EXPECT_EQ(hit->display_name, "Notepad");
   EXPECT_EQ(hit->launch_target, "t.lnk");
-  EXPECT_EQ(svc.find("app-0000000000000000"), nullptr);
-  EXPECT_EQ(svc.find(""), nullptr);
+  EXPECT_FALSE(svc.find("app-0000000000000000").has_value());
+  EXPECT_FALSE(svc.find("").has_value());
 }
 
 TEST(CatalogService, UnavailableSourceUnionAndTypeMapping) {
@@ -317,7 +317,7 @@ TEST(LaunchService, RelaunchReplacesSession) {
   EXPECT_NE(*r1.application_session_id, *r2.application_session_id);
   expectUuidFormat(*r2.application_session_id);
 
-  const auto& s = fx.launch.sessions().at(fx.app.app_id);
+  const auto s = fx.launch.sessions().at(fx.app.app_id);
   EXPECT_EQ(s.application_session_id, *r2.application_session_id);
   EXPECT_EQ(s.pid, 4243u);
   EXPECT_EQ(s.started_ms, 1500u);

@@ -11,6 +11,7 @@
 #include <functional>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -45,9 +46,10 @@ class CatalogService {
   void ensureScanned() const;
   // Protocol-visible revision (store revision floored at 1).
   uint32_t revision() const;
-  // nullptr if absent. Valid until the next rescan (the store vector may be
-  // reallocated by a later addOrUpdate).
-  const CatalogRecord* find(const std::string& app_id) const;
+  // std::nullopt if absent. Returns a COPY of the record: callers may use
+  // it after the mutex is released, across concurrent rescans that can
+  // reallocate the store vector (review fix, RW-H-008 integration).
+  std::optional<CatalogRecord> find(const std::string& app_id) const;
   // app_catalog_changed bookkeeping (heartbeat piggyback).
   uint32_t lastBroadcastRevision() const;
   void markBroadcast(uint32_t revision);
@@ -124,7 +126,8 @@ class LaunchService {
   // mark closed; return one AppStatus{app_id, CLOSED, session_id} per
   // transition (each session is reported at most once).
   std::vector<protocol::AppStatus> sweep();
-  const std::map<std::string, LaunchSession>& sessions() const;
+  // A consistent snapshot copy of the session table (thread-safe).
+  std::map<std::string, LaunchSession> sessions() const;
 
  private:
   mutable std::mutex mu_;

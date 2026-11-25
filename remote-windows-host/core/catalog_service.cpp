@@ -65,11 +65,12 @@ uint32_t CatalogService::revision() const {
   return protocolRevision(store_.revision());
 }
 
-const CatalogRecord* CatalogService::find(const std::string& app_id) const {
+std::optional<CatalogRecord> CatalogService::find(const std::string& app_id)
+    const {
   std::lock_guard<std::mutex> lk(mu_);
   for (const auto& r : store_.records())
-    if (r.app_id == app_id) return &r;
-  return nullptr;
+    if (r.app_id == app_id) return r;  // copy: safe after lock release
+  return std::nullopt;
 }
 
 uint32_t CatalogService::lastBroadcastRevision() const {
@@ -100,7 +101,7 @@ protocol::LaunchResult LaunchService::handleLaunch(const std::string& app_id) {
   // Allow-list check FIRST: unknown ids never reach the launcher (FR-02).
   // A launch may arrive before the first catalog request: scan once.
   catalog_.ensureScanned();
-  const CatalogRecord* rec = catalog_.find(app_id);
+  const std::optional<CatalogRecord> rec = catalog_.find(app_id);
   if (!rec) {
     res.error_code = "unknown_app_id";
     res.safe_message = "Unknown application";
@@ -161,7 +162,11 @@ std::vector<protocol::AppStatus> LaunchService::sweep() {
   return out;
 }
 
-const std::map<std::string, LaunchSession>& LaunchService::sessions() const {
+// Returns a copy (locked): callers never observe the internal map while a
+// concurrent handleLaunch/sweep mutates it (review fix, RW-H-008
+// integration). Callers may bind the copy to a const reference.
+std::map<std::string, LaunchSession> LaunchService::sessions() const {
+  std::lock_guard<std::mutex> lk(mu_);
   return sessions_;
 }
 
