@@ -11,8 +11,9 @@ harness.runAll(ProtocolCodecSuite.cases)
 harness.runAll(ProtocolVectorSuite.cases)
 harness.runAll(FramingSuite.cases)
 harness.runAll(SignalingClientSuite.cases)
+harness.runAll(CatalogLaunchSuite.cases)
 
 let total = harness.checks
 print("")
-print("TOTAL: \(total) checks across 6 suites, \(harness.failures) failure(s)")
+print("TOTAL: \(total) checks across 7 suites, \(harness.failures) failure(s)")
 exit(harness.failures == 0 ? 0 : 1)

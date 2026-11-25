@@ -31,9 +31,10 @@ public enum SignalingState: String, Equatable, CaseIterable {
 /// The transport is injected (`SignalingTransport`) so unit tests can
 /// drive the state machine without a socket. All state mutations are
 /// serialized on one lock; callbacks (`onStateChanged`, `onCatalog`,
-/// `onPairingResult`) are delivered after the state section completes and
-/// may arrive on the transport's queue — the UI must hop to the main
-/// queue. Set the callbacks once, before the first `connect`.
+/// `onPairingResult`, `onLaunchResult`, `onAppStatus`) are delivered after
+/// the state section completes and may arrive on the transport's queue —
+/// the UI must hop to the main queue. Set the callbacks once, before the
+/// first `connect`.
 public final class SignalingClient {
 
     public struct Config: Equatable {
@@ -104,6 +105,13 @@ public final class SignalingClient {
     public var onStateChanged: ((SignalingState) -> Void)?
     public var onCatalog: ((AppCatalog) -> Void)?
     public var onPairingResult: ((PairingResult) -> Void)?
+    /// Host `launch_result` for a `launch_app` this client sent
+    /// (echoes the `app_id`; non-sensitive, safe to surface to the UI).
+    /// Same delivery contract as `onCatalog`.
+    public var onLaunchResult: ((LaunchResult) -> Void)?
+    /// Host `app_status` liveness (`running`/`closed`), heartbeat-piggybacked.
+    /// Same delivery contract as `onCatalog`.
+    public var onAppStatus: ((AppStatus) -> Void)?
 
     // MARK: Internals
 
@@ -208,6 +216,20 @@ public final class SignalingClient {
         }
     }
 
+    /// Launch a host application by its stable `app_id` (FR-02). Only
+    /// valid while `.paired`; carries a fresh `request_id` like
+    /// `requestCatalog`. One click, one `launch_app` — no retry logic, no
+    /// auto-resend (the client never sends paths or commands).
+    @discardableResult
+    public func launchApp(appID: String) -> Bool {
+        return withSyncResult {
+            guard _state == .paired else { return false }
+            sendEnvelope(Envelope(kind: .launchApp, requestID: nextRequestID(),
+                                  payload: .launchApp(LaunchApp(appID: appID))))
+            return true
+        }
+    }
+
     // MARK: Transport events
 
     private func handleReady() {
@@ -291,8 +313,24 @@ public final class SignalingClient {
                 }
             }
         case .appCatalogChanged:
-            // Re-requesting on catalog changes lands with C-CATALOG.
-            break
+            // The host's catalog changed: re-request the snapshot (the
+            // host answers with the fresh catalog). Non-forced — the host
+            // already knows the catalog changed (RW-C-002).
+            if _state == .paired {
+                sendEnvelope(makeAppCatalogRequest(forceRescan: false))
+            }
+        case .launchResult(let result):
+            if _state == .paired {
+                pendingCallbacks.append { [weak self] in
+                    self?.onLaunchResult?(result)
+                }
+            }
+        case .appStatus(let status):
+            if _state == .paired {
+                pendingCallbacks.append { [weak self] in
+                    self?.onAppStatus?(status)
+                }
+            }
         case .heartbeat:
             break // liveness only; last activity already updated
         default:
@@ -317,10 +355,16 @@ public final class SignalingClient {
     }
 
     private func makeAppCatalogRequest(forceRescan: Bool) -> Envelope {
-        let id = _nextRequestID
-        _nextRequestID = id == UInt32.max ? 1 : id &+ 1
+        let id = nextRequestID()
         return Envelope(kind: .appCatalogRequest, requestID: id,
                         payload: .appCatalogRequest(AppCatalogRequest(forceRescan: forceRescan)))
+    }
+
+    /// Fresh monotonic `request_id` (wraps UInt32.max → 1).
+    private func nextRequestID() -> UInt32 {
+        let id = _nextRequestID
+        _nextRequestID = id == UInt32.max ? 1 : id &+ 1
+        return id
     }
 
     // MARK: Heartbeat

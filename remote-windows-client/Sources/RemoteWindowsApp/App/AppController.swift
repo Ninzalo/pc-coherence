@@ -1,25 +1,42 @@
 import AppKit
 import RemoteWindowsCore
 
-/// Owns the main application window and the connection/pairing UI
-/// (task RW-C-001, role C-CONNECTION). Every control performs a real
-/// action (plan rule 6): Connect/Disconnect drive the
+/// Owns the main application window and the connection/pairing/catalog UI
+/// (task RW-C-001, extended by RW-C-002, role C-CATALOG). Every control
+/// performs a real action (plan rule 6): Connect/Disconnect drive the
 /// `SignalingClient`, the pairing-code field feeds the pairing handshake
-/// against the Windows Host, and the status/host/catalog labels mirror
-/// the live session state. No decorative controls.
-final class AppController: NSObject, NSWindowDelegate {
+/// against the Windows Host, the status/host labels mirror the live
+/// session state, and the catalog section (search field, table, Launch
+/// button) lists the host's real app catalog with per-app launch state.
+/// No decorative controls.
+final class AppController: NSObject, NSWindowDelegate,
+    NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate {
     private var window: NSWindow?
     private let preferences: Preferences
     private let client: SignalingClient
+    private let model = CatalogLaunchModel()
 
     private var stateLabel: NSTextField!
     private var hostNameLabel: NSTextField!
-    private var catalogLabel: NSTextField!
     private var hostAddressField: NSTextField!
     private var pairingCodeField: NSTextField!
     private var connectButton: NSButton!
     private var disconnectButton: NSButton!
     private var submitCodeButton: NSButton!
+
+    // Catalog section (RW-C-002): replaces the old count-only label.
+    private var catalogSection: NSStackView!
+    private var catalogHeaderLabel: NSTextField!
+    private var catalogCountLabel: NSTextField!
+    private var catalogStatusLabel: NSTextField!
+    private var searchField: NSSearchField!
+    private var catalogTable: NSTableView!
+    private var catalogTableScroll: NSScrollView!
+    private var catalogLaunchRow: NSStackView!
+    private var launchButton: NSButton!
+
+    private static let catalogNameColumnID = NSUserInterfaceItemIdentifier("catalog.name")
+    private static let catalogStatusColumnID = NSUserInterfaceItemIdentifier("catalog.status")
 
     static let clientVersion = "0.1.0"
 
@@ -35,8 +52,22 @@ final class AppController: NSObject, NSWindowDelegate {
         wiredClient.onStateChanged = { [weak self] _ in
             DispatchQueue.main.async { self?.refreshUI() }
         }
-        wiredClient.onCatalog = { [weak self] _ in
-            DispatchQueue.main.async { self?.refreshUI() }
+        wiredClient.onCatalog = { [weak self] catalog in
+            DispatchQueue.main.async {
+                self?.model.applyCatalog(catalog)
+                self?.refreshCatalogUI()
+            }
+        }
+        wiredClient.onLaunchResult = { [weak self] result in
+            DispatchQueue.main.async {
+                self?.model.applyLaunchResult(result)
+                self?.refreshCatalogUI()
+            }
+        }
+        wiredClient.onAppStatus = { [weak self] status in
+            DispatchQueue.main.async {
+                self?.handleAppStatus(status)
+            }
         }
     }
 
@@ -46,7 +77,7 @@ final class AppController: NSObject, NSWindowDelegate {
 
     func showMainWindow() {
         let win = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 300),
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 560),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -101,11 +132,11 @@ final class AppController: NSObject, NSWindowDelegate {
 
         stateLabel = makeLabel("")
         hostNameLabel = makeLabel("")
-        catalogLabel = makeLabel("")
         hostNameLabel.textColor = .secondaryLabelColor
-        catalogLabel.textColor = .secondaryLabelColor
 
-        [title, version, hostRow, codeRow, stateLabel, hostNameLabel, catalogLabel]
+        let catalogSection = makeCatalogSection()
+
+        [title, version, hostRow, codeRow, stateLabel, hostNameLabel, catalogSection]
             .forEach { stack.addArrangedSubview($0) }
 
         let content = win.contentView!
@@ -119,6 +150,68 @@ final class AppController: NSObject, NSWindowDelegate {
         win.makeKeyAndOrderFront(nil)
         window = win
         refreshUI()
+    }
+
+    // MARK: Catalog section (RW-C-002)
+
+    /// Search field + sorted table + Launch button. The section is
+    /// hidden while not paired; an empty catalog keeps the honest empty
+    /// message instead of a table (no fake rows).
+    private func makeCatalogSection() -> NSStackView {
+        catalogHeaderLabel = makeLabel(L10n.t("catalog.title"), bold: true)
+        catalogCountLabel = makeLabel("")
+        catalogCountLabel.textColor = .secondaryLabelColor
+        let catalogHeaderRow = NSStackView(views: [catalogHeaderLabel, catalogCountLabel])
+        catalogHeaderRow.orientation = .horizontal
+        catalogHeaderRow.spacing = 8
+
+        // Live search: filters by case-insensitive substring on
+        // display_name as the user types.
+        searchField = NSSearchField()
+        searchField.translatesAutoresizingMaskIntoConstraints = false
+        searchField.placeholderString = L10n.t("catalog.search.placeholder")
+        searchField.delegate = self
+        searchField.widthAnchor.constraint(equalToConstant: 520).isActive = true
+
+        catalogTable = NSTableView()
+        let nameColumn = NSTableColumn(identifier: Self.catalogNameColumnID)
+        nameColumn.title = L10n.t("catalog.column.name")
+        nameColumn.width = 320
+        nameColumn.minWidth = 120
+        let statusColumn = NSTableColumn(identifier: Self.catalogStatusColumnID)
+        statusColumn.title = L10n.t("catalog.column.status")
+        statusColumn.width = 180
+        statusColumn.minWidth = 100
+        catalogTable.addTableColumn(nameColumn)
+        catalogTable.addTableColumn(statusColumn)
+        catalogTable.usesAlternatingRowBackgroundColors = true
+        catalogTable.allowsMultipleSelection = false
+        catalogTable.dataSource = self
+        catalogTable.delegate = self
+        catalogTableScroll = NSScrollView()
+        catalogTableScroll.documentView = catalogTable
+        catalogTableScroll.hasVerticalScroller = true
+        catalogTableScroll.autohidesScrollers = true
+        catalogTableScroll.translatesAutoresizingMaskIntoConstraints = false
+        catalogTableScroll.widthAnchor.constraint(equalToConstant: 520).isActive = true
+        catalogTableScroll.heightAnchor.constraint(equalToConstant: 200).isActive = true
+
+        launchButton = makeButton(L10n.t("catalog.launch"),
+                                  action: #selector(launchAction))
+        catalogStatusLabel = makeLabel("")
+        catalogStatusLabel.textColor = .secondaryLabelColor
+        catalogLaunchRow = NSStackView(views: [launchButton, catalogStatusLabel])
+        catalogLaunchRow.orientation = .horizontal
+        catalogLaunchRow.spacing = 8
+
+        let section = NSStackView(views: [catalogHeaderRow, searchField,
+                                          catalogTableScroll, catalogLaunchRow])
+        section.orientation = .vertical
+        section.alignment = .leading
+        section.spacing = 8
+        section.isHidden = true
+        catalogSection = section
+        return section
     }
 
     // MARK: Actions (each performs a real effect)
@@ -150,6 +243,31 @@ final class AppController: NSObject, NSWindowDelegate {
         client.submitPairingCode(code)
     }
 
+    /// Launch the selected catalog entry by its stable `app_id` only
+    /// (FR-02: the client never sends paths or commands). One click, one
+    /// `launch_app` — no retry, no auto-resend.
+    @objc private func launchAction() {
+        guard let appID = selectedAppID(),
+              let entry = model.entry(for: appID), entry.available else {
+            catalogStatusLabel.stringValue = L10n.t("catalog.launchBlocked")
+            NSSound.beep()
+            return
+        }
+        guard client.state == .paired else {
+            catalogStatusLabel.stringValue = L10n.t("catalog.launchBlocked")
+            NSSound.beep()
+            return
+        }
+        // Surface the state problem instead of a silent no-op (rule 6).
+        guard client.launchApp(appID: appID) else {
+            catalogStatusLabel.stringValue = L10n.t("catalog.launchBlocked")
+            NSSound.beep()
+            return
+        }
+        model.beginLaunch(appID: appID)
+        refreshCatalogUI()
+    }
+
     /// Accepts `host` or `host:port` (port 1...65535; default 47987).
     static func parseHostAddress(_ raw: String) -> (host: String, port: Int)? {
         let trimmed = raw.trimmingCharacters(in: .whitespaces)
@@ -170,17 +288,25 @@ final class AppController: NSObject, NSWindowDelegate {
 
     private func refreshUI() {
         let state = client.state
+        // No stale launch state after the socket dies (input-state
+        // discipline analog).
+        if state == .disconnected {
+            model.reset()
+            model.searchText = ""
+            searchField.stringValue = ""
+            catalogStatusLabel.stringValue = ""
+        }
         stateLabel.stringValue = statusText(for: state)
         hostNameLabel.stringValue = client.hostName.map {
             L10n.t("host.name") + ": " + $0
         } ?? ""
-        catalogLabel.stringValue = catalogText()
         connectButton.isEnabled = state == .disconnected
         disconnectButton.isEnabled = state != .disconnected
         let codeEnabled = state == .pairing || state == .rejected || state == .locked
         pairingCodeField.isEnabled = codeEnabled
         submitCodeButton.isEnabled = codeEnabled
         hostAddressField.isEnabled = state == .disconnected
+        refreshCatalogUI()
     }
 
     private func statusText(for state: SignalingState) -> String {
@@ -206,12 +332,125 @@ final class AppController: NSObject, NSWindowDelegate {
         }
     }
 
-    private func catalogText() -> String {
-        guard client.state == .paired, let catalog = client.catalog else { return "" }
-        if catalog.entries.isEmpty {
-            return L10n.t("catalog.empty")
+    private func refreshCatalogUI() {
+        let paired = client.state == .paired
+        let hasEntries = model.entries.count > 0
+        let listVisible = paired && hasEntries
+        catalogSection.isHidden = !paired
+        searchField.isHidden = !listVisible
+        catalogTableScroll.isHidden = !listVisible
+        catalogLaunchRow.isHidden = !listVisible
+        if paired {
+            catalogCountLabel.stringValue = hasEntries
+                ? String(model.entries.count) + " " + L10n.t("catalog.available")
+                : L10n.t("catalog.empty")
         }
-        return String(catalog.entries.count) + " " + L10n.t("catalog.available")
+        refreshTableRows()
+    }
+
+    /// Rebuild the table and re-validate the selection after a wholesale
+    /// catalog replacement (onCatalog may fire with a selection live):
+    /// keep the selection if the app survives the refresh, else clear it.
+    private func refreshTableRows() {
+        let previousAppID = selectedAppID()
+        catalogTable.reloadData()
+        if let appID = previousAppID,
+           let index = model.visibleEntries.firstIndex(where: { $0.appID == appID }) {
+            catalogTable.selectRowIndexes(IndexSet(integer: index),
+                                          byExtendingSelection: false)
+        } else {
+            catalogTable.deselectAll(nil)
+        }
+        refreshLaunchButton()
+    }
+
+    private func refreshLaunchButton() {
+        let appID = selectedAppID()
+        let available = appID.flatMap { model.entry(for: $0)?.available } ?? false
+        launchButton.isEnabled = client.state == .paired && available
+    }
+
+    private func selectedAppID() -> String? {
+        let row = catalogTable.selectedRow
+        guard row >= 0, row < model.visibleEntries.count else { return nil }
+        return model.visibleEntries[row].appID
+    }
+
+    private func handleAppStatus(_ status: AppStatus) {
+        if status.state == .closed, let entry = model.entry(for: status.appID) {
+            catalogStatusLabel.stringValue =
+                entry.displayName + ": " + L10n.t("catalog.closed")
+        }
+        model.applyAppStatus(status)
+        refreshCatalogUI()
+    }
+
+    // MARK: Table data source / delegate
+
+    func numberOfRows(in tableView: NSTableView) -> Int {
+        model.visibleEntries.count
+    }
+
+    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?,
+                   row: Int) -> NSView? {
+        guard let tableColumn,
+              row >= 0, row < model.visibleEntries.count else { return nil }
+        let entry = model.visibleEntries[row]
+        let identifier = NSUserInterfaceItemIdentifier("catalog.cell")
+        let label: NSTextField
+        if let reused = tableView.makeView(withIdentifier: identifier, owner: self)
+            as? NSTextField {
+            label = reused
+        } else {
+            let fresh = NSTextField(labelWithString: "")
+            fresh.identifier = identifier
+            fresh.lineBreakMode = .byTruncatingTail
+            label = fresh
+        }
+        if tableColumn.identifier == Self.catalogNameColumnID {
+            label.stringValue = entry.displayName
+            // Unavailable entries are dimmed (the host reports them as
+            // unavailable; the Launch button stays disabled for them).
+            label.textColor = entry.available ? .labelColor : .secondaryLabelColor
+        } else {
+            let (text, color) = statusDisplay(for: entry)
+            label.stringValue = text
+            label.textColor = color
+        }
+        return label
+    }
+
+    /// Per-row availability + launch state (FR-01/FR-02). The client
+    /// shows what the host reports — `started` stays `started` until the
+    /// host says more; nothing is invented.
+    private func statusDisplay(for entry: AppEntry) -> (String, NSColor) {
+        guard entry.available else {
+            return (L10n.t("catalog.unavailable"), .secondaryLabelColor)
+        }
+        switch model.launchState(for: entry.appID) {
+        case .idle:
+            return ("", .labelColor)
+        case .launching:
+            return (L10n.t("catalog.launching"), .labelColor)
+        case .started:
+            return (L10n.t("catalog.started"), .labelColor)
+        case .running:
+            return (L10n.t("catalog.running"), .labelColor)
+        case .failed(let message):
+            return (String(format: L10n.t("catalog.failed"), message), .labelColor)
+        }
+    }
+
+    func tableViewSelectionDidChange(_ notification: Notification) {
+        refreshLaunchButton()
+    }
+
+    // MARK: Search field (live filtering)
+
+    func controlTextDidChange(_ notification: Notification) {
+        guard (notification.object as? NSTextField) === searchField else { return }
+        model.searchText = searchField.stringValue
+        refreshTableRows()
     }
 
     // MARK: Window delegate

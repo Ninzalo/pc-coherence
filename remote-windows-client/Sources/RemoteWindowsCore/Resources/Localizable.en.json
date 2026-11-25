@@ -20,5 +20,17 @@
   "host.placeholder": "host or host:port",
   "host.name": "Host",
   "catalog.empty": "No applications available yet",
-  "catalog.available": "applications available"
+  "catalog.available": "applications available",
+  "catalog.title": "Applications",
+  "catalog.search.placeholder": "Search applications",
+  "catalog.launch": "Launch",
+  "catalog.launching": "Launching…",
+  "catalog.started": "Started",
+  "catalog.running": "Running",
+  "catalog.closed": "Closed",
+  "catalog.failed": "Failed: %@",
+  "catalog.unavailable": "Unavailable",
+  "catalog.column.name": "Name",
+  "catalog.column.status": "Status",
+  "catalog.launchBlocked": "Launch is available only while paired with the Windows Host"
 }

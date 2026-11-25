@@ -22,5 +22,21 @@ enum L10nSuite {
             harness.expectEqual(L10n.t("connect.button"), "Connect")
             harness.expectEqual(L10n.t("catalog.empty"), "No applications available yet")
         },
+        .case("catalogStringsResolve") {
+            harness.expectEqual(L10n.t("catalog.title"), "Applications")
+            harness.expectEqual(L10n.t("catalog.search.placeholder"),
+                                "Search applications")
+            harness.expectEqual(L10n.t("catalog.launch"), "Launch")
+            harness.expectEqual(L10n.t("catalog.launching"), "Launching…")
+            harness.expectEqual(L10n.t("catalog.started"), "Started")
+            harness.expectEqual(L10n.t("catalog.running"), "Running")
+            harness.expectEqual(L10n.t("catalog.closed"), "Closed")
+            harness.expectEqual(L10n.t("catalog.failed"), "Failed: %@")
+            harness.expectEqual(L10n.t("catalog.unavailable"), "Unavailable")
+            harness.expectEqual(L10n.t("catalog.column.name"), "Name")
+            harness.expectEqual(L10n.t("catalog.column.status"), "Status")
+            harness.expectEqual(L10n.t("catalog.launchBlocked"),
+                                "Launch is available only while paired with the Windows Host")
+        },
     ]
 }
