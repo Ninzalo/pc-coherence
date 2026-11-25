@@ -1,7 +1,9 @@
 # macOS Client — STATUS
 
 Last updated: 2026-11-25 (RW-C-002 catalog UI with launch lifecycle
-integrated — 250/250 Swift checks @ 6edb929).
+integrated — 250/250 Swift checks @ `6edb929`; next-task order set to
+C-MEDIA → C-INPUT with task packets RW-C-003/RW-C-004 committed at
+`7bb5687`).
 
 ## Implemented and verified
 
@@ -54,11 +56,14 @@ RW-C-001. Launch smoke: process running after 4 s, terminated cleanly.
 
 - Remote window presentation, video surface (C-WINDOWS / C-PERF).
   Media transport is now specified (root ADR-0008: TCP 47988, H.264,
-  AES-256-GCM; normative PROTOCOL §9, RW-H-006) but not yet
-  implemented on either side: Host `media/` core (RW-H-007) and the
-  Client media receiver (C-MEDIA track) are the pending tasks. The
-  v0.1.0 control protocol carries no video (by design).
-- Keyboard shortcut adaptation (FR-08) — next task.
+  AES-256-GCM; normative PROTOCOL §9, RW-H-006) and the Host `media/`
+  core is DONE and runner-verified (RW-H-007: §9.4 framing, §9.3 key
+  derivation with golden vectors reproduced, §9.5 stream registry,
+  §9.2 HMAC-SHA256, CNG AES-256-GCM backend — Host STATUS.md). The
+  pending task on this side is the Client media receiver (C-MEDIA,
+  RW-C-003). The v0.1.0 control protocol carries no video (by design).
+- Keyboard shortcut adaptation (FR-08) — second next task (after
+  C-MEDIA, per the plan dependency graph; RW-C-004).
 - Power controls UI (FR-11/12).
 - Pairing-secret persistence in the Keychain (later security task;
   RW-C-001 deliberately persists nothing).
@@ -91,12 +96,22 @@ changed to `192.168.100.139` in the host-address field for the test
 
 ## Next tasks
 
-1. C-INPUT: shortcut adaptation stack with FR-08/§6.4 coverage.
-2. C-MEDIA (parallel Host track RW-H-007/008): media-channel receiver —
-   TCP 47988 client with the §9.2 handshake (CryptoKit HMAC-SHA256),
-   §9.4 framing, per-stream AES-256-GCM open (CryptoKit must reproduce
-   the golden vectors in `Protocol/Contract/test-vectors/media/`), then
-   VideoToolbox H.264 decode + per-window rendering (C-PERF).
+1. C-MEDIA (RW-C-003): media-channel receiver — TCP 47988 client with
+   the §9.2 handshake (CryptoKit HMAC-SHA256 + session-key derivation,
+   the formula in PROTOCOL §9.3 / `key-derivation.json`), §9.4 binary
+   framing, per-stream AES-256-GCM open (CryptoKit MUST reproduce the
+   golden vectors in `Protocol/Contract/test-vectors/media/` exactly),
+   then VideoToolbox H.264 decode + per-window rendering (C-PERF).
+   Task packet: `docs/agent-tasks/RW-C-003.md` (committed `7bb5687`).
+   Dependency gate satisfied: host media core (RW-H-007/008) done and
+   runner-verified, client catalog (RW-C-002) done.
+2. C-INPUT (RW-C-004): shortcut adaptation stack with FR-08/§6.4
+   coverage (macOS→Windows VK mapping, 16 built-ins with the plan's
+   exact ON/OFF defaults, versioned custom store, `ShortcutRuleValidator`,
+   `KeyboardEventTranslator`, Keyboard Shortcuts settings UI +
+   interception-explanation text; input-pipeline integration is scoped
+   OUT — it needs C-WINDOWS/H-INPUT). Task packet:
+   `docs/agent-tasks/RW-C-004.md` (committed `7bb5687`).
 
 ## Notes
 

@@ -1,12 +1,13 @@
 # Windows Host — STATUS
 
-Last updated: 2026-11-25 (RW-H-009 Win32 catalog merged; MSVC build fixed through
-three runner rounds @ `991dae4`; first ctest run hung ~3.5 h on a UWP-alias
-notepad launch in session 0 — triaged, root-caused, test fixed, ctest
-per-test timeout + 25-min runner watchdog added; RW-H-009 Windows
-unit-tests/selftest PENDING at the new SHA. RW-H-008: 143/143 macOS +
-Windows runner 146/146 unit-tests + selftest @ `d342bb3`; see
-"Implemented and verified" below).
+Last updated: 2026-11-25 (RW-H-009 Win32 catalog DONE and verified: Windows
+runner **157/157 unit tests + selftest_ok @ `7bb5687`** after four runner
+feedback rounds — MSVC build fixes, a 3.5 h session-0 launch hang triaged
+and root-caused, ctest per-test timeout + 25-min watchdog added, and
+launch/scan correctness fixes (pre-resolve .lnk targets, no
+`SLGP_FILESYSTEM` in the Start Menu scan, ms-appx URI fixtures that do not
+persist on 24H2). macOS 145/145. RW-H-008: 143/143 macOS + Windows runner
+146/146 @ `d342bb3`; see "Implemented and verified" below).
 
 ## Implemented and verified
 
@@ -19,6 +20,8 @@ Windows runner 146/146 unit-tests + selftest @ `d342bb3`; see
 | `docs/PROTOCOL.md` framing, validation, authorization, lifecycle rules | present, normative for both peers; codec now enforces `window_id` UUID format and `title` ≤ 512 chars at decode time (`bad_uuid` / `title_too_long`) |
 | Media channel normative spec (RW-H-006, CONTRACT): PROTOCOL §9 — TCP 47988, handshake, key derivation (matching `core/pairing.cpp`), little-endian binary framing, stream lifecycle, robustness, security (ADR-0008) + golden vectors `protocol/test-vectors/media/` (3× AES-256-GCM + key derivation; generated with CryptoKit, independently re-verified with pyca/cryptography, OpenSSL 3.5.9 EVP, and shasum CLI) | `bash tools/export_protocol.sh <dir>` → bundle incl. `test-vectors/media/*.json` in SHA256SUMS (27 entries, verified); Client snapshot re-synced via `tools/sync_protocol_from_host.sh` (`shasum -a 256 -c` OK); §7.4 session-key formula corrected to the implemented `rwh-pairing-v1\|code\|host_name`; stale WebRTC note in §1 removed |
 | `media/` portable media core (RW-H-007, H-MEDIA): the machine-facing parts of PROTOCOL §9 — binary packet framing (§9.4, 13-byte LE header, exact-byte unit test), per-window stream key / nonce-prefix derivation (§9.3, golden `key-derivation.json` reproduced exactly), thread-safe stream registry (§9.5, per-stream `core::FpsGate`, 16-bit collision documented: last add wins), RFC 2104 HMAC-SHA256 (§9.2 handshake, RFC 4231 TC1/TC2), portable `IAead` interface + Windows CNG AES-256-GCM backend (`AeadCng`, WIN32-only TU) | 127/127 macOS CTest (previous 104 + 23 new media tests, command below) + **CNG backend VERIFIED on the Windows runner**: `unit-tests` @ `d5c1f044` → `100% tests passed out of 130`, `RWH status=tests_ok`, incl. `MediaAeadCng.GoldenVectorsReproducedExactly` (all three `aes-256-gcm.json` ciphertext+tag values reproduced by live BCrypt on DESKTOP-PC), `RoundTrip1000Bytes`, `OpenRejectsTamperedCiphertext` (evidence below) |
+| Win32 catalog + launch adapters (RW-H-009, H-CATALOG): `win32/catalog/` — `StartMenuSource` (per-user + per-machine Start Menu scan via `IShellLinkW`, dedupe, `app_id` derivation, URI classification: `ms-appx:`/`ms-app://` targets kept, other URI schemes skipped — FR-01), `Win32Launcher` (allow-listed `ShellExecuteExW`; the .lnk is resolved with `IShellLinkW::GetPath` + `GetFileAttributesW` existence check BEFORE the shell call — the shell's own resolution of a broken target blocks indefinitely in headless session-0, verified live; empty target → `launch_failed`, URI targets skip the existence check, COM-down → `launch_failed`), `Win32ProcessProbe` (`OpenProcess`/`WaitForSingleObject` on the launcher's retained NOCLOSEPROCESS handle). App wiring: `AppController` injects `ControlServices` (real catalog, real launches, heartbeat piggyback) and `--selftest` now exercises the full path: pairing → catalog (3 entries from the real Start Menu scan) → `launch_app` of a Start Menu entry → `launch_result started` → unknown app_id → `rejected` | macOS 145/145 CTest (143 portable + 2 new WIN32-unbuildable-on-macOS test files excluded; the 2 new are the Win32 test suites, Windows-only) + **Windows runner @ `7bb56873ae575e2da641c949f2f2fb74fb9532bd` (2026-11-25): `100% tests passed out of 157` (145 portable + 3 CNG + 9 WIN32-only: 5 `StartMenuSource` + 4 `Win32Launcher`), `Total Test time 0.91 s`, `RWH ctest_exit=0`, `RWH status=tests_ok`; `selftest` → `{"selftest":true,"passed":true,"port":47987,"reply_kinds":"hello;pairing_challenge;pairing_result;app_catalog;launch_result;launch_result","pairing":"accepted","catalog_entries":3,"launch":"started","launch_unknown":"rejected"}`, `RWH selftest_exit=0`, `RWH status=selftest_ok`** (evidence below) |
+| Runner feedback rounds 3–4 (2026-11-25, plan rule 2 — live 24H2 findings recorded in code comments): round 3 run @ `d97ab841` → 3 failures: (a) `Win32Launcher.DeletedTargetIsLaunchFailed` hit the 300 s per-test timeout — `ShellExecuteExW` blocked in the shell's resolution of a missing-target .lnk in session-0 (the safety net converting a 3.5 h hang class into a clean 300 s failure); (b) the kill test raced a cmd.exe process that exits instantly on stdin-EOF under sshd (stale-handle `WAIT_FAILED`); (c) `SLGP_FILESYSTEM` made `GetPath` fail for URI targets, silently dropping ms-appx shortcuts. Fixes (`9a0b911b`): pre-resolve before the shell call, kill test retargeted to `msg.exe "/W *"` (plain Win32, blocks until killed; waits on the launcher's retained handle) → 156/157. Round 4: sole remaining failure `StartMenuSource.DisplayNameFallbacksAndAvailability` — probed the PC (WScript.Shell: create .lnk, `SetPath` to an ms-appx URI, Save, reopen → `TargetPath=[] URL=[]`): **URI targets set through `IShellLinkW::SetPath` do not persist on Windows 11 24H2**, so the fixture shortcut genuinely has no retrievable target and the source correctly skips it; the test now verifies the premise (`fixtureTargetEmpty()`: record absent AND target unretrievable — a retrievable-but-missing record is still a regression) instead of assuming the record exists, keeping the strong assertions for OSes where URIs do persist (`8967f00`) → 157/157 | `9a0b911b` runner run: 156/157, launcher tests 0.04 s / 0.08 s; `7bb5687` runner run: **157/157 PASS** (line above) |
 | ADRs 0001–0009 | `docs/decisions/` (0008: MVP media transport — TCP 47988, H.264, AES-GCM, WebRTC deferred; 0009: single-repo topology deviation from plan §4.3) |
 | `core/catalog_service` portable catalog + launch domain (RW-H-008, H-CATALOG): `CatalogSource`/`CatalogService` (scan → dedupe → protocol-ready `app_catalog` snapshot, revision + broadcast bookkeeping), `AppLauncher`/`ProcessProbe` interfaces + `LaunchService` (allow-listed launch by `app_id`, per-app launch sessions with UUID session ids, liveness sweep → `app_status`), `makeUuid`; `app::ControlServices` injection into `SessionAuth` (real catalog reply, real launch result, heartbeat piggyback for `app_catalog_changed` + `app_status` — thread-local, no cross-connection writes; nullptr = byte-identical legacy placeholders) | 143/143 macOS CTest (previous 127 + 14 `catalog_service_test` + 2 loopback `session_auth` e2e with wired services, command below) + **Windows runner `unit-tests` @ `d342bb3`: `100% tests passed out of 146`, `RWH status=tests_ok`** (146 = 143 portable + 3 CNG-only). Integration review fix `d342bb3`: `CatalogService::find()` returns a record copy (the child's pointer return was only valid under the now-released lock → UAF under a concurrent forced rescan) and `LaunchService::sessions()` returns a locked copy |
 
@@ -31,9 +34,14 @@ cmake --build remote-windows-host/build -j
 ctest --test-dir remote-windows-host/build --output-on-failure
 ```
 Result: 2026-11-25, macOS 27.2.1, CMake 4.5.1,
-Ninja 1.13.2, clang (Apple). Build clean (exit 0). **143/143 tests
-PASSED** (previous 127 + 14 new `catalog_service_test` cases + 2 new
-`session_auth` loopback e2e cases, 0 failed). Suites:
+Ninja 1.13.2, clang (Apple). Build clean (exit 0). **145/145 tests
+PASSED** (previous 143 + the 2 RW-H-009 held-handle cases
+`LaunchService.SweepUsesRetainedHandleWhenPidIsBlind` and
+`LaunchService.RelaunchReleasesSupersededHandle`, 0 failed). The 2 new
+Win32 test suites (`win32_launcher_test`, `startmenu_source_test`)
+build ONLY on Windows — on macOS they are excluded from the CTest set
+(per AGENTS.md: Win32 targets do not compile on macOS; recorded as NOT
+RUN there, verified on the runner below). Suites:
 sha256, protocol_version, protocol_json (incl. 22 canonical test vectors),
 validation, fps_policy, catalog, window_relationships, input, pairing,
 power_policy, authorization, framing, signaling_e2e, session_auth
@@ -65,7 +73,7 @@ replaces the session (new id/pid/timestamp), `makeUuid` format +
 | Portable catalog/launch core (RW-H-008) | `prepare` @ `d342bb3258f4b13e1bba1226dbaea8da2cd95e95` (2026-11-25): `RWH status=prepared`; `unit-tests` @ same SHA: `100% tests passed out of 146`, `RWH ctest_exit=0`, `RWH status=tests_ok` (MSVC 14.51.36231 / SDK 10.0.26100, RelWithDebInfo, Ninja — 146 = 143 portable + 3 WIN32-only CNG); `selftest` @ same SHA: `{"selftest":true,"passed":true,"port":47987,"reply_kind":"app_catalog","envelopes":3,"pairing":"accepted","reply_kinds":"hello;pairing_challenge;pairing_result;app_catalog"}`, `RWH selftest_exit=0`, `RWH status=selftest_ok` (behavior unchanged — `AppController` does not wire `ControlServices` until RW-H-009) |
 | Win32 catalog MSVC build (RW-H-009) | First MSVC compile of `win32/catalog/` — three build rounds found real SDK/MSVC discrepancies (clang on macOS hid all of them; plan rule 2, all recorded in the code): 4-arg `IShellLinkW::GetPath` (the 3-arg form does not exist in this SDK), 1-arg `IShellLinkW::SetPath` C++ signature, `std::towlower` NOT in `std` under MSVC 14.51 even with `<cctype>`/`<cwchar>` (replaced by a deterministic ASCII fold), `SLGP_FILESYSTEM`/`SLGP_LONGPATH` not declared by SDK 10.0.26100 `<shlobj.h>` under this project's version pins (locally `#ifndef`-defined, Microsoft-documented values 0x10/0x20). Build at `991dae4` completed: all 6 link steps OK (`rwh_win32_catalog.lib`, `rwh-host.exe`, both WIN32 test exes) |
 | Runner hang triage + safety nets (2026-11-25) | First `unit-tests` ctest run at `991dae4` **hung ~3.5 h**: `win32_launcher_test` blocked in `ShellExecuteExW` — on Windows 11 24H2 `System32\notepad.exe` is an App Execution Alias stub for the PACKAGED Notepad, and app-model activation from the headless session-0 (sshd) context never completes (no process ever appeared; killed test PID 9736 + ctest PID 9148). Fixes committed: (a) the real-launch test now targets `%SystemRoot%\System32\cmd.exe` (plain Win32: starts, real PID + NOCLOSEPROCESS handle, idles on stdin, killable); (b) `ctest --timeout 300` per-test kill → clean failure instead of a block; (c) global 25-minute action watchdog in `rwh-runner.ps1` that kills a hung action (it then emits no `RWH status=..._ok` line → honest non-PASS; the `exit { block }` cleanup idiom is forbidden there — in this PS 5.1 context it terminates the script immediately, verified live). Runner re-uploaded SHA256-verified; `status` smoke-tested: `RWH watchdog_minutes=25`, `RWH status=ok` |
-| RW-H-009 unit tests / selftest at the new SHA | **PENDING — NOT RUN** (the fixes above are not yet executed on the runner; do not report as PASS). Re-run: `windows-runner.sh prepare <new-sha> && unit-tests && selftest` |
+| RW-H-009 unit tests / selftest at the final SHA | `prepare` + `unit-tests` + `selftest` @ `7bb56873ae575e2da641c949f2f2fb74fb9532bd` (2026-11-25, after rounds 3–4 above): `RWH status=prepared`, **`100% tests passed out of 157`** (145 portable + 3 CNG + 9 WIN32-only: 5 `StartMenuSource` + 4 `Win32Launcher`), `Total Test time (real) = 0.91 s`, `RWH ctest_exit=0`, `RWH status=tests_ok` (MSVC 14.51.36231 / SDK 10.0.26100, RelWithDebInfo, Ninja; full chain exit 0); `selftest` → `{"selftest":true,"passed":true,"stage":"","port":47987,"reply_kind":"launch_result","envelopes":5,"pairing":"accepted","reply_kinds":"hello;pairing_challenge;pairing_result;app_catalog;launch_result;launch_result","error":"","catalog_entries":3,"launch":"started","launch_unknown":"rejected"}`, `RWH selftest_exit=0`, `RWH status=selftest_ok` |
 
 ## Windows Host app shell (H-FOUND) — verified
 
@@ -302,12 +310,8 @@ Windows runner (DESKTOP-PC), 2026-11-24:
 - Win32 adapters (`win32/`): capture (WGC), window registry/events,
   input (SendInput), power (SetSuspendState /
   InitiateSystemShutdownExW). **NOT RUN** — not implemented yet (next
-  feature tracks: H-WINDOWS/H-MEDIA/H-INPUT/H-POWER).
-- Win32 catalog adapters: Start Menu IShellLinkW scan, allow-listed
-  `ShellExecuteExW` launcher, process probe. **NOT RUN** — not
-  implemented yet; the portable catalog/launch core they build on is
-  done (RW-H-008). The Win32 layer + app/selftest wiring is RW-H-009
-  (packet `docs/agent-tasks/RW-H-009.md`).
+  feature tracks: H-WINDOWS/H-MEDIA/H-INPUT/H-POWER). The Win32 catalog
+  adapters are DONE and verified (RW-H-009, evidence above).
 
 ## Blocked
 
@@ -317,14 +321,33 @@ Windows runner (DESKTOP-PC), 2026-11-24:
 
 ## Next tasks
 
-1. H-CATALOG (RW-H-009): Win32 Start Menu source (IShellLinkW),
-   allow-listed `ShellExecuteExW` launcher, Win32 process probe,
-   AppController + selftest wiring — task packet
-   `docs/agent-tasks/RW-H-009.md`.
-2. C-CATALOG (RW-C-002): Client catalog list UI with launch lifecycle —
-   task packet `remote-windows-client/docs/agent-tasks/RW-C-002.md`.
+1. C-MEDIA (Client): media-channel receiver — TCP 47988 client with the
+   §9.2 handshake (CryptoKit HMAC-SHA256 + session-key derivation), §9.4
+   framing, per-stream AES-256-GCM open (must reproduce the golden
+   vectors in `Protocol/Contract/test-vectors/media/`), VideoToolbox
+   H.264 decode + per-window rendering — task packet
+   `remote-windows-client/docs/agent-tasks/RW-C-003.md` (written,
+   committed `7bb5687`; dependency gate satisfied: host media core
+   RW-H-007/008 done, client catalog RW-C-002 done).
+2. C-INPUT (Client, after C-MEDIA per the plan dependency graph): FR-08
+   shortcut adaptation stack — task packet
+   `remote-windows-client/docs/agent-tasks/RW-C-004.md` (written,
+   committed `7bb5687`; input-pipeline integration is scoped out of the
+   packet — it needs C-WINDOWS/H-INPUT).
+3. H-WINDOWS / H-MEDIA (Host): Win32 WGC capture + window registry/events
+   (the next host track; no packet yet — to be written when dispatched).
 
 Done:
+
+- H-CATALOG: Win32 catalog + launch adapters + app wiring (RW-H-009) —
+  DONE 2026-11-25 (branch `agent/H-CATALOG/RW-H009`; integrated at
+  `e2c6f85`/`94c712c` + held-handle review fix `7f1b344` + runner
+  feedback rounds 3–4 `d97ab841`/`9a0b911b`/`8967f00`; 145/145 macOS
+  ctest; Windows runner **157/157 unit tests + selftest_ok @
+  `7bb5687`** — full evidence in the "Windows runner" tables above,
+  incl. the 24H2 live findings: session-0 shell-launch hang class,
+  `SLGP_FILESYSTEM` URI drop, URI targets not persisting via
+  `IShellLinkW::SetPath`).
 
 - H-CATALOG: portable catalog + launch services (RW-H-008) — DONE
   2026-11-25 (branch `agent/H-CATALOG/RW-H008`; integrated at `c3891c1`
