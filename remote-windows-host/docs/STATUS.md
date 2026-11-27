@@ -1,11 +1,15 @@
 # Windows Host — STATUS
 
-Last updated: 2026-11-27 (RW-H-010 Stage 1: portable window-registry core
-implemented — live window registry with UUID window_ids, owner/parent
-relationship graph, cross-PID auxiliary correlation (ADR-0006), modality
-inference, snapshot reconciliation; **177/177 macOS CTest** (145 prior +
-32 new), macOS-verifiable; the Win32 WinEvents adapter + hermetic
-integration test are Stage 2 (Windows-runner-verified, pending). RW-H-009
+Last updated: 2026-11-27 (RW-H-010 COMPLETE on branch
+`agent/H-WINDOWS/RW-H-010` @ `6ea4591`, not yet merged to main: Stage 1
+portable window-registry core — live window registry with UUID
+window_ids, owner/parent relationship graph, cross-PID auxiliary
+correlation (ADR-0006), modality inference, snapshot reconciliation —
+**178/178 macOS CTest** (145 prior + 33 new); Stage 2 Win32 WinEvents
+adapter (`win32/windows/`) + hermetic Windows integration test —
+**Windows runner @ `6ea4591`: build exit 0 + 196/196 unit tests
+(RWH status=tests_ok)**, interactive-session re-run 6/6 PASSED,
+evidence in the Windows runner table below. RW-H-009
 Win32 catalog remains the last fully-verified Windows item: runner
 **157/157 unit tests + selftest_ok @ `7bb5687`** after four runner
 feedback rounds — MSVC build fixes, a 3.5 h session-0 launch hang triaged
@@ -22,7 +26,7 @@ merge.)
 
 | Item | Evidence |
 |---|---|
-| Window registry core (RW-H-010 Stage 1, H-WINDOWS, plan FR-03): `core/window_registry.{hpp,cpp}` — live registry of top-level windows; durable `window_id` = UUID v4 assigned once at first sight (HWND never the remote identity, ADR-0006); full `WindowRecord` (hwnd transient, pid/tid, title, class, DPI-aware client-area geometry, visible/enabled/minimized/maximized, z-order rank, active, owner/parent/root-owner native edges + resolved remote window_ids, role, modality, app_session_id, surface kind); event state machine (create/show/hide/destroy/name-change/location-change/z-order/focus/minimize/restore/enable) with idempotent re-delivery and HWND-recycling → fresh UUID; reconciliation scan ("scan wins for current truth, events win for history" via per-field event recency) recovering missed creates/destroys, idempotent; relationship graph (owner/parent resolution incl. late-owner Reannounce, nested root-owner chains); ADR-0006 session correlation (owner/root-owner chain cross-PID, corroborated pid-set, focus-transition chain — PID alone NEVER correlates, explicit counter-example test); surface classification (WS_CHILD-style = ChildControl, never a duplicate capture stream; owned/popup top-levels = own stream); modality inference (none / window-modal / app-modal from owner + owner+sibling enabled state, portable seam) | 32 new test cases in `tests/window_registry_test.cpp` (lifecycle, HWND reuse, reconciliation, nested/cross-PID dialogs, z-order, focus, destroy cleanup, anti-pattern correlation, surface, modality, session grouping) — macOS **177/177 CTest** (previous 145 + 32 new, 0 failed; commands below). Win32 adapter = Stage 2 (NOT RUN on macOS by design — Win32 targets do not compile there) |
+| Window registry core (RW-H-010 Stage 1, H-WINDOWS, plan FR-03): `core/window_registry.{hpp,cpp}` — live registry of top-level windows; durable `window_id` = UUID v4 assigned once at first sight (HWND never the remote identity, ADR-0006); full `WindowRecord` (hwnd transient, pid/tid, title, class, DPI-aware client-area geometry, visible/enabled/minimized/maximized, z-order rank, active, owner/parent/root-owner native edges + resolved remote window_ids, role, modality, app_session_id, surface kind); event state machine (create/show/hide/destroy/name-change/location-change/z-order/focus/minimize/restore/enable) with idempotent re-delivery and HWND-recycling → fresh UUID; reconciliation scan ("scan wins for current truth, events win for history" via per-field event recency) recovering missed creates/destroys, idempotent; relationship graph (owner/parent resolution incl. late-owner Reannounce, nested root-owner chains); ADR-0006 session correlation (owner/root-owner chain cross-PID, corroborated pid-set, focus-transition chain — PID alone NEVER correlates, explicit counter-example test); surface classification (WS_CHILD-style = ChildControl, never a duplicate capture stream; owned/popup top-levels = own stream); modality inference (none / window-modal / app-modal from owner + owner+sibling enabled state, portable seam) | 33 new test cases in `tests/window_registry_test.cpp` (lifecycle, HWND reuse, reconciliation, nested/cross-PID dialogs, z-order, focus, destroy cleanup, anti-pattern correlation, surface, modality, session grouping) — macOS **178/178 CTest** (previous 145 + 33 new, 0 failed; commands below). Win32 adapter = Stage 2, **DONE and runner-verified at `6ea4591`** (evidence in the Windows runner table) — NOT RUN on macOS by design: Win32 targets do not compile there |
 | Protocol contract v0.1.0 (schema, VERSION, 22 test vectors, export tool) | `tools/export_protocol.sh` runs, produces **per-file** `SHA256SUMS` (fixed 2026-11-24: the old script hashed the printed file list, yielding one `-:` entry; now `sha256sum` over each file); export re-verified 25/25 |
 | `core/` portable protocol model: types, JSON codec, semantic validation, version parsing, FPS gate, catalog, window relationships, input/key mapping, pairing, power policy, authorization | 104/104 CTest tests pass (commands below) |
 | `network/` portable signaling: length-prefixed framing, TCP socket, signaling server/client (HELLO/pairing/heartbeat) | `signaling_e2e_test` loopback + concurrent clients + malformed-frame handling pass |
@@ -43,10 +47,11 @@ cmake -S remote-windows-host -B remote-windows-host/build
 cmake --build remote-windows-host/build -j
 ctest --test-dir remote-windows-host/build --output-on-failure
 ```
-Result: 2026-11-27 (RW-H-010 Stage 1), macOS 27.2.1, CMake 4.5.1,
-Ninja 1.13.2, clang (Apple). Build clean (exit 0). **177/177 tests
-PASSED** (previous 145 + 32 new `window_registry_test` cases, 0 failed).
-The 32 new cases: WindowRegistryLifecycle (11: full-field announce with
+Result: 2026-11-27 (RW-H-010, final branch state `6ea4591`), macOS
+27.2.1, CMake 4.5.1, Ninja 1.13.2, clang (Apple). Build clean (exit 0).
+**178/178 tests PASSED** (previous 145 + 33 new `window_registry_test`
+cases, 0 failed).
+The 33 new cases: WindowRegistryLifecycle (11: full-field announce with
 UUID identity, HWND recycling → fresh window_id, name/location/z-order
 updates + idempotent re-delivery, hide/show, minimize/restore, focus
 active-flag handoff, destroy-removal with parent survival, owner-death
@@ -62,8 +67,9 @@ late anchor), SurfaceClassification (3: child control never a separate
 stream, owned popup is its own surface, child-inside-tracked-parent),
 Modality (4: no-owner never modal, enabled owner → window-modal,
 owner+siblings disabled → app-modal transition both ways, enabled sibling
-keeps window-modal), AppSession (2: primary-pid first top-level anchors,
-explicit association → auxiliary role). The Win32 adapter test suites
+keeps window-modal), AppSession (3: primary-pid first top-level anchors,
+explicit association → auxiliary role, zero-geometry helper does not
+steal the anchor). The Win32 adapter test suites
 (STAGE 2) build ONLY on Windows — on macOS they are excluded from the
 CTest set (per AGENTS.md: Win32 targets do not compile on macOS; recorded
 as NOT RUN there). Earlier suites (sha256, protocol_version, protocol_json
@@ -85,6 +91,7 @@ catalog_service suite) unchanged and green at their prior counts.
 | Win32 catalog MSVC build (RW-H-009) | First MSVC compile of `win32/catalog/` — three build rounds found real SDK/MSVC discrepancies (clang on macOS hid all of them; plan rule 2, all recorded in the code): 4-arg `IShellLinkW::GetPath` (the 3-arg form does not exist in this SDK), 1-arg `IShellLinkW::SetPath` C++ signature, `std::towlower` NOT in `std` under MSVC 14.51 even with `<cctype>`/`<cwchar>` (replaced by a deterministic ASCII fold), `SLGP_FILESYSTEM`/`SLGP_LONGPATH` not declared by SDK 10.0.26100 `<shlobj.h>` under this project's version pins (locally `#ifndef`-defined, Microsoft-documented values 0x10/0x20). Build at `991dae4` completed: all 6 link steps OK (`rwh_win32_catalog.lib`, `rwh-host.exe`, both WIN32 test exes) |
 | Runner hang triage + safety nets (2026-11-25) | First `unit-tests` ctest run at `991dae4` **hung ~3.5 h**: `win32_launcher_test` blocked in `ShellExecuteExW` — on Windows 11 24H2 `System32\notepad.exe` is an App Execution Alias stub for the PACKAGED Notepad, and app-model activation from the headless session-0 (sshd) context never completes (no process ever appeared; killed test PID 9736 + ctest PID 9148). Fixes committed: (a) the real-launch test now targets `%SystemRoot%\System32\cmd.exe` (plain Win32: starts, real PID + NOCLOSEPROCESS handle, idles on stdin, killable); (b) `ctest --timeout 300` per-test kill → clean failure instead of a block; (c) global 25-minute action watchdog in `rwh-runner.ps1` that kills a hung action (it then emits no `RWH status=..._ok` line → honest non-PASS; the `exit { block }` cleanup idiom is forbidden there — in this PS 5.1 context it terminates the script immediately, verified live). Runner re-uploaded SHA256-verified; `status` smoke-tested: `RWH watchdog_minutes=25`, `RWH status=ok` |
 | RW-H-009 unit tests / selftest at the final SHA | `prepare` + `unit-tests` + `selftest` @ `7bb56873ae575e2da641c949f2f2fb74fb9532bd` (2026-11-25, after rounds 3–4 above): `RWH status=prepared`, **`100% tests passed out of 157`** (145 portable + 3 CNG + 9 WIN32-only: 5 `StartMenuSource` + 4 `Win32Launcher`), `Total Test time (real) = 0.91 s`, `RWH ctest_exit=0`, `RWH status=tests_ok` (MSVC 14.51.36231 / SDK 10.0.26100, RelWithDebInfo, Ninja; full chain exit 0); `selftest` → `{"selftest":true,"passed":true,"stage":"","port":47987,"reply_kind":"launch_result","envelopes":5,"pairing":"accepted","reply_kinds":"hello;pairing_challenge;pairing_result;app_catalog;launch_result;launch_result","error":"","catalog_entries":3,"launch":"started","launch_unknown":"rejected"}`, `RWH selftest_exit=0`, `RWH status=selftest_ok` |
+| RW-H-010 Stage 2 — Win32 window-registry adapter (2026-11-27, task-branch SHA `6ea4591f273648e9abf0bd06d95d41fc298baa86`, branch `agent/H-WINDOWS/RW-H-010` — the runner's `prepare` fetches only `origin/main`, so the runner checkout was fetched + checked out to the task-branch SHA directly over ssh, then the allow-listed `build`/`unit-tests` actions ran against it) | `windows-runner.sh build` @ `6ea4591`: exit 0, all 32 targets linked incl. `win32_windows_registry_test.exe` — first MSVC compile of `win32/windows/Win32WindowSource.cpp` (clean: no SDK/MSVC discrepancies found; MSVC 14.51.36231, SDK 10.0.26100.0, RelWithDebInfo, Ninja), `RWH status=build_ok`. `windows-runner.sh unit-tests` @ `6ea4591` (session 0): **`100% tests passed out of 196`** (157 pre-task baseline + 33 core `window_registry_test` + 6 `Win32WindowsRegistryTest`), `Total Test time (real) = 15.61 s`, `RWH ctest_exit=0`, `RWH status=tests_ok`; all 6 hermetic adapter tests `Passed` individually (tests #191–#196: UUID announce + geometry, owned-dialog owner/links/modality, owner-disable → app-modal, dialog-destroy parent survival, initial-scan recovery, title-change + minimize/restore). **Interactive-session re-run** (schtasks on the user's desktop, same SHA): **6/6 PASSED in 5.23 s**, no leftover processes, no failure dumps. WinEvent API details verified against Microsoft docs 2026-11-27 (SetWinEventHook runs on the creating thread's message loop → dedicated hook thread with pump; EVENT_OBJECT_* 0x8000..0x800C; EnumWindows; GetWindow(GW_OWNER); GetAncestor(GA_ROOTOWNER); GetWindowThreadProcessId; DWM/DPI). **Live 24H2 build-26300 findings** (probe-verified on this PC, recorded in code comments): (a) a NULL-window `SetTimer` on the hook thread NEVER ticks (session 0 AND interactive) → reconciliation cadence runs on a dedicated thread posting `kScanNowMsg` to the hook thread; (b) SW_MINIMIZE/SW_RESTORE emit only LOCATIONCHANGE/REORDER — NO STATECHANGE → the adapter refreshes enabled/minimized/maximized on those events too; (c) the OS creates transient invisible zero-client-area helper windows in an app's own process whose CREATE can precede the main window's → the session-anchor heuristic requires a non-zero client area (portable regression test `AppSession.ZeroGeometryHelperDoesNotStealAnchor`). Session-0 context (sshd): `IsWindowVisible` always FALSE and SW_MINIMIZE is a no-op — the integration test is session-context-aware and asserts per context (structured fields only, no window contents in logs) |
 
 ## Windows Host app shell (H-FOUND) — verified
 
@@ -318,11 +325,12 @@ Windows runner (DESKTOP-PC), 2026-11-24:
 
 ## Implemented, NOT verified on Windows
 
-- Win32 adapters (`win32/`): capture (WGC), window registry/events,
-  input (SendInput), power (SetSuspendState /
-  InitiateSystemShutdownExW). **NOT RUN** — not implemented yet (next
-  feature tracks: H-WINDOWS/H-MEDIA/H-INPUT/H-POWER). The Win32 catalog
-  adapters are DONE and verified (RW-H-009, evidence above).
+- Win32 adapters (`win32/`): capture (WGC), input (SendInput), power
+  (SetSuspendState / InitiateSystemShutdownEx). **NOT RUN** — not
+  implemented yet (next feature tracks: H-MEDIA/H-INPUT/H-POWER). The
+  Win32 catalog adapters are DONE and verified (RW-H-009, evidence
+  above); the Win32 window-registry adapter is DONE and runner-verified
+  (RW-H-010 Stage 2, evidence in the Windows runner table above).
 
 ## Blocked
 
@@ -336,11 +344,13 @@ Windows runner (DESKTOP-PC), 2026-11-24:
    `remote-windows-client/docs/agent-tasks/RW-C-004.md` (written,
    committed `7bb5687`; input-pipeline integration is scoped out of the
    packet — it needs C-WINDOWS/H-INPUT).
-2. H-WINDOWS (Host): window registry — Stage 1 (portable core) DONE on
-   branch `agent/H-WINDOWS/RW-H-010` (177/177 macOS, above); Stage 2
-   (Win32 WinEvents adapter + hermetic integration test, Windows-runner
-   verified) is the active step. H-MEDIA: Win32 WGC capture (next host
-   track after the registry lands).
+2. H-WINDOWS (Host): window registry — RW-H-010 COMPLETE on branch
+   `agent/H-WINDOWS/RW-H-010` @ `6ea4591` (pushed, not merged): Stage 1
+   portable core 178/178 macOS; Stage 2 Win32 WinEvents adapter +
+   hermetic integration test, Windows runner 196/196 @ `6ea4591`
+   (evidence in the Windows runner table above). Integration/merge to
+   main is the next step. H-MEDIA: Win32 WGC capture (next host track
+   after the registry lands).
 
 Done:
 
