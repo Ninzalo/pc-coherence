@@ -1,34 +1,23 @@
 # Windows Host — STATUS
 
-Last updated: 2026-11-27 (RW-H-011b FIXED + VERIFIED — the open RW-H-011
-live-frame defect is resolved on branch `agent/H-MEDIA/RW-H-011b` @
-`191caa26d90db2b737b93f3ee3d0d46b73dc5a86` (from main @ `f51f2e4`; NOT
-merged). Root cause: the hermetic WGC test's FakeEncoder violated the
-IVideoEncoder seam contract (it never pushed encoded frames to the
-sink), so frames_delivered / sink counts were structurally zero
-regardless of adapter health — the permanent stage-counter table proved
-the real adapter delivered 58/58 live frames in 15 s (emitted=58,
-received=58, encoded=58, delivered=0, sink=0). Fix: the fake now pushes
-one stub EncodedFrame per source frame (`tests/win32_wgc_capture_test.cpp`
-only — NO adapter/manager change needed). Verified @ `191caa2`: Windows
-runner `RWH status=build_ok` + session-0 unit tests **213/213 = 212
-passed + #213 skipped by design** (`RWH status=tests_ok`) +
-**INTERACTIVE hermetic test PASSED in 1.29 s** (≥5 live frames @ 320×200,
-correct window_id routing, clean release, counters sane); macOS
-**194/194 CTest** @ same SHA. Permanent diagnostics added in the same
-branch: per-surface stage counters in the WGC adapter
-(frames_arrived / frames_wait_returned / null_frames / size_skips /
-qi_failures / copy_failures / emitted / handler_errors) + frameStats()
-accessor + structured start/stop/error log lines (counts/sizes/ids only)
-+ `--wgc-diag` stage-table mode in the hermetic test. SDK 26100 doc-check
-findings (2026-11-27, verified against installed headers):
-`DirectXPixelFormat::B8G8R8A8UIntNormalized = 87` in the 26100 cppwinrt
-projection (= the compositor's frame format — pool format ruled out as
-the starve suspect) and `ID3D11DeviceContext::CopyResource` now returns
-void and throws on failure (C2440). Pre-task state: RW-H-011 INTEGRATED
-into main @ `d363c93d955e79e2cc1f0a9da8a2cca3ebb488ff`
-(194/194 macOS + 213/213 Windows; the live frame path through the real
-adapter was BLOCKED pending this task).)
+Last updated: 2026-11-27 (RW-H-011b INTEGRATED — main @
+`afcfd1c355003d04d1751303adb5bc7ffe0a1320`, fast-forward of branch
+`agent/H-MEDIA/RW-H-011b` (5 commits from main @ `f51f2e4`: `de86794`,
+`76038e1`, `7dc6d4d`, `191caa2`, `afcfd1c`); pre-merge fix detail and
+evidence in the RW-H-011b row of the Windows runner table below.
+Merged-revision verification: **194/194 macOS CTest** @ `afcfd1c` +
+**Windows runner @ `afcfd1c`: 213/213 executed = 212 passed + #213
+skipped by design** (`WgcCapture.HermeticConsentGatedPipeline` clean
+skip in session 0), `100% tests passed out of 213`, `Total Test time
+(real) = 18.40 s`, `RWH ctest_exit=0`, `RWH status=tests_ok` (MSVC
+14.51.36231 / SDK 10.0.26100.0, RelWithDebInfo, Ninja). OPEN: the
+loopback-E2E SEGFAULT flake class remains unresolved (dedicated
+root-cause task pending — NOT fixed in this integration; observed
+members across Windows runs: `SessionAuthE2E.RotateOrCurrentCodeAfterConsumePairsNewClient`,
+`SessionAuthE2E.UnpairedClientControlRejectedOverChannel`,
+`SessionAuthE2E.PairedServicesHeartbeatPiggyback` (SEGFAULT),
+`SignalingE2E.MalformedFramesCountedNotCrash` — intermittent, different
+member per run, Windows-only, macOS green at the same SHA).)
 
 Earlier header state (preserved for context — RW-H-011 INTEGRATED —
 merged into main @ `d363c93d955e79e2cc1f0a9da8a2cca3ebb488ff`
@@ -396,7 +385,8 @@ Windows runner (DESKTOP-PC), 2026-11-24:
    (interactive hermetic test PASSING: ≥5 live frames @ 320×200, correct
    window_id routing, clean release; root cause = the test's FakeEncoder
    never pushed to the sink; full stage tables in the Windows runner table
-   above; branch NOT merged — merge both H-MEDIA branches, then continue).
+   above; branch INTEGRATED into main @ `afcfd1c` — continue with the
+   remaining items).
    Remaining: (a) the H.264 encoder backend (RW-H-012 — no in-tree
    H.264 encoder; the seam wraps a factory without a concrete backend); (b) H-FOUND
    app-layer wiring. (The RW-H-010 window registry merged into main @
