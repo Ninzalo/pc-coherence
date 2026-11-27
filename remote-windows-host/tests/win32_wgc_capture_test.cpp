@@ -51,6 +51,14 @@ using namespace remotewindows;
 
 namespace {
 
+// RW-H-011b diagnostic mode: `--wgc-diag` (parsed in main before
+// gtest) makes the test print the full per-stage frame-path counter
+// table (adapter stage counters + manager metrics + fake encoder +
+// sink) at the end of the bounded frame wait, in BOTH the
+// no-frames and the frames paths. Structured values only:
+// counts / sizes / ids — never pixels.
+bool g_diag = false;
+
 constexpr int kClientW = 320;
 constexpr int kClientH = 200;
 constexpr uint64_t kFrameTimeoutMs = 15000;  // bounded: never hangs
@@ -184,6 +192,66 @@ bool WaitFor(const std::function<bool()>& pred, uint64_t timeout_ms) {
   }
 }
 
+// RW-H-011b: print the full frame-path stage table (diagnostic mode).
+// Reads the LIVE surface's per-stage adapter counters (the surface must
+// still be running — call this before unshareWindow), then the
+// manager metrics (frames_received at the gate, frames_delivered at
+// the sink, queue depth, drops) and the fake encoder / sink counts.
+// The first zero-count stage in this order locates where live frame
+// flow stopped:
+//   frames_arrived → frames_wait_returned → (size_skips / qi_failures /
+//   copy_failures) → emitted → manager.frames_received →
+//   fake.encoded → manager.frames_delivered → sink.count
+void PrintDiagTable(win32::WgcCaptureSource& source,
+                    core::CaptureSessionManager& mgr, FakeEncoderFactory& factory,
+                    EncodedSink& sink, const std::string& window_id) {
+  win32::WgcCaptureSource::FrameStats fs{};
+  const bool have_surface = source.frameStats(window_id, fs);
+  const core::CaptureSessionMetrics m = mgr.metrics(window_id);
+  const size_t encoded = factory.current ? factory.current->encodedCount() : 0;
+  const size_t keyframes = factory.current ? factory.current->keyframeCount() : 0;
+  std::fprintf(stderr,
+               "[wgc-diag] table window_id=%s adapter_surface=%d "
+               "manager_state=%d\n",
+               window_id.c_str(), have_surface ? 1 : 0,
+               static_cast<int>(m.state));
+  std::fprintf(stderr, "[wgc-diag] stage=frames_arrived n=%llu\n",
+               static_cast<unsigned long long>(fs.frames_arrived));
+  std::fprintf(stderr, "[wgc-diag] stage=frames_wait_returned n=%llu\n",
+               static_cast<unsigned long long>(fs.frames_wait_returned));
+  std::fprintf(stderr, "[wgc-diag] stage=null_frames n=%llu\n",
+               static_cast<unsigned long long>(fs.null_frames));
+  std::fprintf(stderr, "[wgc-diag] stage=size_skips n=%llu\n",
+               static_cast<unsigned long long>(fs.size_skips));
+  std::fprintf(stderr, "[wgc-diag] stage=qi_failures n=%llu\n",
+               static_cast<unsigned long long>(fs.qi_failures));
+  std::fprintf(stderr, "[wgc-diag] stage=copy_failures n=%llu\n",
+               static_cast<unsigned long long>(fs.copy_failures));
+  std::fprintf(stderr, "[wgc-diag] stage=emitted n=%llu\n",
+               static_cast<unsigned long long>(fs.emitted));
+  std::fprintf(stderr, "[wgc-diag] stage=handler_errors n=%llu\n",
+               static_cast<unsigned long long>(fs.handler_errors));
+  std::fprintf(stderr, "[wgc-diag] manager frames_received=%llu "
+               "frames_delivered=%llu frames_dropped=%llu queue_depth=%llu "
+               "queue_max_depth=%llu error_count=%llu surface_starts=%llu "
+               "keyframe_requests=%llu last_frame_ts_us=%llu\n",
+               static_cast<unsigned long long>(m.frames_received),
+               static_cast<unsigned long long>(m.frames_delivered),
+               static_cast<unsigned long long>(m.frames_dropped),
+               static_cast<unsigned long long>(m.queue_depth),
+               static_cast<unsigned long long>(m.queue_max_depth),
+               static_cast<unsigned long long>(m.error_count),
+               static_cast<unsigned long long>(m.surface_starts),
+               static_cast<unsigned long long>(m.keyframe_requests),
+               static_cast<unsigned long long>(m.last_frame_ts_us));
+  std::fprintf(stderr, "[wgc-diag] fake_encoder encoded=%llu keyframes=%llu "
+               "sink_count=%llu\n",
+               static_cast<unsigned long long>(encoded),
+               static_cast<unsigned long long>(keyframes),
+               static_cast<unsigned long long>(sink.countFor(window_id)));
+  std::fflush(stderr);
+}
+
 }  // namespace
 
 // ------------------------------------------------------------- suite
@@ -225,6 +293,7 @@ TEST(WgcCapture, HermeticConsentGatedPipeline) {
 
   const core::CaptureError err = mgr.shareWindow(rec);
   if (err == core::CaptureError::ConsentRequired) {
+    if (g_diag) PrintDiagTable(source, mgr, factory, sink, kTestId);
     mgr.unshareWindow(kTestId);
     EXPECT_FALSE(mgr.isShared(kTestId));
     EXPECT_EQ(source.surfaceCount(), 0u);
@@ -260,6 +329,9 @@ TEST(WgcCapture, HermeticConsentGatedPipeline) {
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
   }
+  // RW-H-011b: in diagnostic mode, print the full stage table while the
+  // surface is still live (before any unshare), in both outcomes.
+  if (g_diag) PrintDiagTable(source, mgr, factory, sink, kTestId);
   if (!got_frames) {
     mgr.unshareWindow(kTestId);
     EXPECT_EQ(source.surfaceCount(), 0u);
@@ -298,6 +370,16 @@ TEST(WgcCapture, HermeticConsentGatedPipeline) {
 }
 
 int main(int argc, char** argv) {
+  // RW-H-011b: strip --wgc-diag BEFORE gtest parses argv (gtest would
+  // reject the unknown flag).
+  for (int i = 1; i < argc; ++i) {
+    if (std::string(argv[i]) == "--wgc-diag") {
+      g_diag = true;
+      for (int j = i; j < argc - 1; ++j) argv[j] = argv[j + 1];
+      --argc;
+      break;
+    }
+  }
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
 }

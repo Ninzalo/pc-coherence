@@ -120,6 +120,25 @@ class WgcCaptureSource : public core::ICaptureSurfaceSource {
   // Number of live surfaces (leak check in tests / host).
   size_t surfaceCount() const;
 
+  // RW-H-011b: per-stage frame-path counters (permanent diagnostics).
+  // One row per stage of the adapter's frame path (pool event → drain →
+  // size check → QI/GetInterface → staging copy → emission). Reading
+  // the table (adapter + manager metrics + encoder/sink counts) locates
+  // the first zero-count stage when a surface delivers no frames.
+  // Structured values only: COUNTS — never pixels or window contents.
+  struct FrameStats {
+    uint64_t frames_arrived = 0;      // FrameArrived handler entered
+    uint64_t frames_wait_returned = 0;  // TryGetNextFrame() returned a frame
+    uint64_t null_frames = 0;         // TryGetNextFrame() returned null
+    uint64_t size_skips = 0;          // size invalid / beyond pool max
+    uint64_t qi_failures = 0;         // QI / GetInterface failure
+    uint64_t copy_failures = 0;       // staging create / copy / map failure
+    uint64_t emitted = 0;             // onCapturedFrame() invoked
+    uint64_t handler_errors = 0;      // exceptions in the frame handler
+  };
+  // Returns false when no (live) surface exists for window_id.
+  bool frameStats(const std::string& window_id, FrameStats& out) const;
+
  private:
   struct Surface;  // per-window WGC state (defined in the .cpp)
   struct Impl;

@@ -63,6 +63,7 @@
 #include <chrono>
 #include <cinttypes>
 #include <condition_variable>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
@@ -123,6 +124,29 @@ uint64_t monotonicUs() {
           .count());
 }
 
+// RW-H-011b: structured diagnostic log (stderr). Structured fields ONLY:
+// stage / window_id / typed error token / counts / sizes / timestamps —
+// never pixels or window contents. A few lines per surface lifecycle
+// (start / stop / error); the per-stage counter table is read via
+// frameStats() (tests / host).
+void diagLog(const char* stage, const char* window_id, const char* extra,
+             uint64_t ts_us) {
+  std::fprintf(stderr, "[wgc] %s window_id=%s %s ts_us=%llu\n", stage,
+               window_id, extra, static_cast<unsigned long long>(ts_us));
+  std::fflush(stderr);
+}
+
+const char* errorToken(core::CaptureError e) {
+  switch (e) {
+    case core::CaptureError::None: return "none";
+    case core::CaptureError::ConsentRequired: return "consent_required";
+    case core::CaptureError::SourceClosed: return "source_closed";
+    case core::CaptureError::SourceUnavailable: return "source_unavailable";
+    case core::CaptureError::InternalError: return "internal_error";
+  }
+  return "unknown";
+}
+
 // The Win32 HWND token is "0x%llX" (win32/windows/Win32WindowSource.cpp
 // HwndKeyImpl); parse it back. Unparseable tokens → nullptr.
 HWND ParseHwndToken(const std::string& token) {
@@ -163,6 +187,14 @@ struct WgcCaptureSource::Surface {
 
   std::atomic<uint64_t> seq{0};
   std::atomic<uint32_t> null_frames{0};
+  // RW-H-011b per-stage frame-path counters (diagnostics).
+  std::atomic<uint64_t> frames_arrived{0};
+  std::atomic<uint64_t> frames_wait_returned{0};
+  std::atomic<uint64_t> size_skips{0};
+  std::atomic<uint64_t> qi_failures{0};
+  std::atomic<uint64_t> copy_failures{0};
+  std::atomic<uint64_t> emitted{0};
+  std::atomic<uint64_t> handler_errors{0};
   std::atomic<bool> stopping{false};
   std::atomic<bool> reported{false};
   std::atomic<bool> start_done{false};
@@ -345,6 +377,7 @@ core::CaptureError WgcCaptureSource::startOnThread(Surface& s) {
                                             const Direct3D11CaptureFramePool& pool,
                                             winrt::Windows::Foundation::
                                                 IInspectable const&) {
+      s.frames_arrived.fetch_add(1);
       if (s.stopping.load()) return;
       Direct3D11CaptureFrame frame = nullptr;
       try {
@@ -363,6 +396,7 @@ core::CaptureError WgcCaptureSource::startOnThread(Surface& s) {
         return;
       }
       s.null_frames.store(0);
+      s.frames_wait_returned.fetch_add(1);
       try {
         std::lock_guard<std::mutex> lk(s.frame_mu);
         if (s.stopping.load() || !s.consumer) return;
@@ -373,12 +407,16 @@ core::CaptureError WgcCaptureSource::startOnThread(Surface& s) {
         auto const desc = dsurface.Description();
         const int32_t w = desc.Width;
         const int32_t h = desc.Height;
-        if (w <= 0 || h <= 0) return;
+        if (w <= 0 || h <= 0) {
+          s.size_skips.fetch_add(1);
+          return;
+        }
         if (static_cast<uint32_t>(w) > s.max_w ||
             static_cast<uint32_t>(h) > s.max_h) {
           // The window outgrew the pool max dimension: skip the frame
           // (the registry's geometry update makes the manager
           // recreate the session with the new size).
+          s.size_skips.fetch_add(1);
           return;
         }
         // SDK 26100 (2026 rework, runner-verified): the projected
@@ -401,13 +439,17 @@ core::CaptureError WgcCaptureSource::startOnThread(Surface& s) {
                         IDirect3DDxgiInterfaceAccess),
                 reinterpret_cast<void**>(&dxgi_access))) ||
             !dxgi_access) {
+          s.qi_failures.fetch_add(1);
           return;
         }
         ID3D11Texture2D* texture = nullptr;
         const HRESULT access_hr = dxgi_access->GetInterface(
             __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&texture));
         dxgi_access->Release();
-        if (FAILED(access_hr) || !texture) return;
+        if (FAILED(access_hr) || !texture) {
+          s.qi_failures.fetch_add(1);
+          return;
+        }
         // (Re)create the staging texture for the current frame size.
         if (!s.staging || s.staging_w != static_cast<uint32_t>(w) ||
             s.staging_h != static_cast<uint32_t>(h)) {
@@ -423,6 +465,7 @@ core::CaptureError WgcCaptureSource::startOnThread(Surface& s) {
           if (FAILED(s.device->CreateTexture2D(&desc, nullptr,
                                                s.staging.put()))) {
             s.staging = nullptr;
+            s.copy_failures.fetch_add(1);
             return;
           }
           s.staging_w = static_cast<uint32_t>(w);
@@ -430,11 +473,16 @@ core::CaptureError WgcCaptureSource::startOnThread(Surface& s) {
         }
         // Bounded copy: this window's frame only (no full-screen
         // readback), row pitch handled.
-        s.ctx->CopyResource(s.staging.get(), texture);
+        if (FAILED(s.ctx->CopyResource(s.staging.get(), texture))) {
+          texture->Release();
+          s.copy_failures.fetch_add(1);
+          return;
+        }
         texture->Release();  // GetInterface reference; copy is done
         D3D11_MAPPED_SUBRESOURCE mapped{};
         if (FAILED(s.ctx->Map(s.staging.get(), 0, D3D11_MAP_READ, 0,
                               &mapped))) {
+          s.copy_failures.fetch_add(1);
           return;
         }
         std::vector<uint8_t> pixels(static_cast<size_t>(w) * h * 4u);
@@ -454,10 +502,12 @@ core::CaptureError WgcCaptureSource::startOnThread(Surface& s) {
         cf.height = static_cast<uint32_t>(h);
         cf.format = core::CaptureFrameFormat::Bgra8;
         cf.pixels = std::move(pixels);
+        s.emitted.fetch_add(1);
         s.consumer->onCapturedFrame(cf);
       } catch (...) {
         // Any WinRT/D3D failure mid-frame: stop the surface and report
         // once (the manager decides recreation vs permanent end).
+        s.handler_errors.fetch_add(1);
         s.stopping.store(true);
         s.stop_cv.notify_all();
         reportOnce(s, CaptureError::SourceClosed);
@@ -484,6 +534,9 @@ void WgcCaptureSource::reportOnce(Surface& s, core::CaptureError error) {
     // unshared the session; reporting would only count an error.
     return;
   }
+  // Structured error line (ids / typed token / timestamp only).
+  diagLog("error", s.window_id.c_str(),
+          (std::string("err=") + errorToken(error)).c_str(), monotonicUs());
   if (s.consumer) s.consumer->onSourceError(s.window_id, error);
 }
 
@@ -505,6 +558,12 @@ void WgcCaptureSource::surfaceWorker(Surface& s) {
     s.start_done = true;
   }
   s.start_cv.notify_all();
+
+  // Structured start line (ids / size / typed token / timestamp only).
+  std::string extra =
+      "err=" + std::string(errorToken(err)) +
+      " size=" + std::to_string(s.max_w) + "x" + std::to_string(s.max_h);
+  diagLog("start", s.window_id.c_str(), extra.c_str(), monotonicUs());
 
   if (err == core::CaptureError::None && !s.stopping.load()) {
     std::unique_lock<std::mutex> lk(s.stop_mu);
@@ -543,6 +602,27 @@ void WgcCaptureSource::surfaceWorker(Surface& s) {
   s.ctx = nullptr;
   s.device = nullptr;
   s.consumer = nullptr;
+  // Structured stop line: the full per-stage counter table (counts only
+  // — the first zero-count stage locates where frame flow stopped).
+  {
+    char line[160];
+    std::snprintf(line, sizeof(line),
+                  "err=%s size=%lux%lu arrived=%llu wait_ok=%llu null=%lu "
+                  "size_skip=%llu qi_fail=%llu copy_fail=%llu emitted=%llu "
+                  "handler_err=%llu",
+                  errorToken(s.start_err),
+                  static_cast<unsigned long>(s.max_w),
+                  static_cast<unsigned long>(s.max_h),
+                  static_cast<unsigned long long>(s.frames_arrived.load()),
+                  static_cast<unsigned long long>(s.frames_wait_returned.load()),
+                  static_cast<unsigned long>(s.null_frames.load()),
+                  static_cast<unsigned long long>(s.size_skips.load()),
+                  static_cast<unsigned long long>(s.qi_failures.load()),
+                  static_cast<unsigned long long>(s.copy_failures.load()),
+                  static_cast<unsigned long long>(s.emitted.load()),
+                  static_cast<unsigned long long>(s.handler_errors.load()));
+    diagLog("stop", s.window_id.c_str(), line, monotonicUs());
+  }
   ::CoUninitialize();
   // Self-erase: only if this surface is still the live entry (an
   // explicit stop/start may have already moved it out).
@@ -646,6 +726,23 @@ bool WgcCaptureSource::isRunning(const std::string& window_id) const {
 size_t WgcCaptureSource::surfaceCount() const {
   std::lock_guard<std::mutex> mu(impl_->mu);
   return impl_->surfaces.size();
+}
+
+bool WgcCaptureSource::frameStats(const std::string& window_id,
+                                  FrameStats& out) const {
+  std::lock_guard<std::mutex> mu(impl_->mu);
+  auto it = impl_->surfaces.find(window_id);
+  if (it == impl_->surfaces.end()) return false;
+  const Surface& s = *it->second;
+  out.frames_arrived = s.frames_arrived.load();
+  out.frames_wait_returned = s.frames_wait_returned.load();
+  out.null_frames = s.null_frames.load();
+  out.size_skips = s.size_skips.load();
+  out.qi_failures = s.qi_failures.load();
+  out.copy_failures = s.copy_failures.load();
+  out.emitted = s.emitted.load();
+  out.handler_errors = s.handler_errors.load();
+  return true;
 }
 
 }  // namespace remotewindows::win32
