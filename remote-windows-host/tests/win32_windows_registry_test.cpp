@@ -349,8 +349,21 @@ TEST_F(Win32WindowsRegistryTest, OwnedDialogCorrelatesWithSessionOwnerAndModalit
   EXPECT_EQ(drec.modality, core::WindowModality::WindowModal);
   EXPECT_EQ(drec.surface_kind, core::WindowSurfaceKind::IndependentTopLevel);
   if (visible_ctx_) {
-    // Dialog created above the parent: closer to the front in z-order.
-    EXPECT_LT(drec.z_order_rank, parent.z_order_rank);
+    // Wait for the z-order to settle: the parent's stored rank is only
+    // re-evaluated once a REORDER event or the reconciliation scan
+    // observes the dialog sitting above it (each record caches the rank
+    // computed when its own CREATE was processed). The dialog is created
+    // directly above the parent, so dialog rank < parent rank.
+    ASSERT_TRUE(WaitUntil([&] {
+      auto d = registry_.findByHwnd(win32::HwndKey(dialog));
+      auto p = registry_.findByHwnd(win32::HwndKey(main));
+      return d && p && d->z_order_rank >= 0 &&
+             p->z_order_rank > d->z_order_rank;
+    }));
+    const auto d_now = registry_.findByHwnd(win32::HwndKey(dialog));
+    const auto p_now = registry_.findByHwnd(win32::HwndKey(main));
+    ASSERT_TRUE(d_now.has_value() && p_now.has_value());
+    EXPECT_LT(d_now->z_order_rank, p_now->z_order_rank);
   }
 }
 
@@ -372,25 +385,20 @@ TEST_F(Win32WindowsRegistryTest, DisablingOwnerTransitionsDialogToAppModal) {
   ASSERT_TRUE(drec0.has_value());
   ASSERT_EQ(drec0->modality, core::WindowModality::WindowModal);
 
-  if (visible_ctx_) {
-    EXPECT_TRUE(EnableWindow(main, FALSE));
-  } else {
-    // Headless session: EnableWindow(FALSE) REPORTS failure
-    // (ERROR_CANCELLED) but still applies the state change (verified
-    // on the runner, diag probe 2026-11-27) — so the STATECHANGE /
-    // scan update still drives the AppModal transition below.
-    EXPECT_FALSE(EnableWindow(main, FALSE));
-  }
+  // EnableWindow(FALSE): the return value is context-dependent and has
+  // been observed FALSE in BOTH verified contexts (headless runner
+  // session 0, diag probe 2026-11-27; and the interactive user session,
+  // 2026-11-27 schtasks run) while the state change is still APPLIED in
+  // both — so the modality transition below (real STATECHANGE / scan
+  // update observed by the registry) is the evidence, not the API
+  // return value.
+  (void)EnableWindow(main, FALSE);
   ASSERT_TRUE(WaitUntil([&] {
     auto r = registry_.findByHwnd(win32::HwndKey(dialog));
     return r && r->modality == core::WindowModality::AppModal;
   }));
 
-  if (visible_ctx_) {
-    EXPECT_TRUE(EnableWindow(main, TRUE));
-  } else {
-    (void)EnableWindow(main, TRUE);  // headless: return value not asserted
-  }
+  (void)EnableWindow(main, TRUE);  // return value not asserted (see above)
   ASSERT_TRUE(WaitUntil([&] {
     auto r = registry_.findByHwnd(win32::HwndKey(dialog));
     return r && r->modality == core::WindowModality::WindowModal;

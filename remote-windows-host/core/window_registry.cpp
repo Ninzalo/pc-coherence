@@ -455,9 +455,12 @@ std::string WindowRegistry::correlateWithSession(WindowRecord& rec) {
   // DEFINITION of the session's own window (launch flow), not PID-only
   // auxiliary correlation — ADR-0006's evidence rules still govern every
   // other window (see decideAssociation; PID alone never associates).
+  // Note: the anchor is claimed even if weakly-correlated members
+  // (e.g. a visible pid-set window) arrived first — the spec defines
+  // the anchor as the primary pid's FIRST top-level, period; the launch
+  // flow may still override with setSessionAnchor().
   for (auto& [sid, s] : sessions_) {
     if (rec.pid == s.primary_pid && !s.anchor_window_id &&
-        s.member_hwnds.empty() &&
         rec.surface_kind == WindowSurfaceKind::IndependentTopLevel) {
       rec.app_session_id = sid;
       s.anchor_window_id = rec.window_id;
