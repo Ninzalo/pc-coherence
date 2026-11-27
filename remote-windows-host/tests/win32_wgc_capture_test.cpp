@@ -38,6 +38,7 @@
 
 #include <winrt/base.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <functional>
@@ -58,10 +59,17 @@ const wchar_t kTestClass[] = L"RWH_WGC_TEST_WINDOW";  // WNDCLASSEXW form
 
 // ------------------------------------------------------ test window
 
+// The window must CHANGE content over time: WGC emits frames on
+// content changes, so a static window would deliver only the initial
+// frame and the >=5-frame wait below could never succeed.
+std::atomic<uint32_t> s_paint_count{0};
+
 LRESULT CALLBACK TestWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   if (msg == WM_PAINT) {
     // Paint deterministic content (no pixel content is ever logged —
-    // structured-logs-only rule: counts/dimensions only).
+    // structured-logs-only rule: counts/dimensions only). The inner
+    // rectangle cycles through 5 shades per paint so consecutive
+    // repaints are pixel-different.
     PAINTSTRUCT ps;
     HDC dc = BeginPaint(hwnd, &ps);
     RECT rc{};
@@ -70,7 +78,8 @@ LRESULT CALLBACK TestWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     ::FillRect(dc, &rc, bg);
     ::DeleteObject(bg);
     RECT inner{rc.left + 20, rc.top + 20, rc.right - 20, rc.bottom - 20};
-    HBRUSH fg = ::CreateSolidBrush(RGB(220, 180, 60));
+    const uint32_t shade = s_paint_count.fetch_add(1) % 5u;
+    HBRUSH fg = ::CreateSolidBrush(RGB(220u - 30u * shade, 180u, 60u));
     ::FillRect(dc, &inner, fg);
     ::DeleteObject(fg);
     EndPaint(hwnd, &ps);
@@ -230,17 +239,36 @@ TEST(WgcCapture, HermeticConsentGatedPipeline) {
   ASSERT_EQ(mgr.stateOf(kTestId), core::CaptureSessionState::Running);
   ASSERT_EQ(source.surfaceCount(), 1u);
 
-  // Bounded wait for live frames (headless session: WGC delivers none).
-  const bool got_frames = WaitFor(
-      [&sink] { return sink.countFor(kTestId) >= 5; }, kFrameTimeoutMs);
+  // Bounded wait for live frames. The test window repaints with a
+  // changing pattern every ~250 ms (RDW_UPDATENOW = synchronous
+  // paint, no message pump needed in this process): WGC emits frames
+  // on content changes, so a static window would deliver only the
+  // initial frame and this wait could never reach the >=5 threshold.
+  // In a headless session (session 0, no desktop) WGC delivers none.
+  bool got_frames = false;
+  const auto frame_deadline = std::chrono::steady_clock::now() +
+                              std::chrono::milliseconds(kFrameTimeoutMs);
+  auto last_repaint = std::chrono::steady_clock::now();
+  while (!got_frames) {
+    got_frames = sink.countFor(kTestId) >= 5;
+    const auto now = std::chrono::steady_clock::now();
+    if (got_frames || now >= frame_deadline) break;
+    if (now - last_repaint >= std::chrono::milliseconds(250)) {
+      last_repaint = now;
+      ::RedrawWindow(hwnd, nullptr, nullptr,
+                     RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
   if (!got_frames) {
     mgr.unshareWindow(kTestId);
     EXPECT_EQ(source.surfaceCount(), 0u);
     ::DestroyWindow(hwnd);
-    GTEST_SKIP() << "no WGC frames within " << kFrameTimeoutMs
-                 << " ms — headless session (no desktop) or display "
-                    "unavailable; live-capture assertions NOT RUN in "
-                    "this context. Run interactive (schtasks) to verify.";
+    GTEST_SKIP() << "fewer than 5 WGC frames within " << kFrameTimeoutMs
+                 << " ms — headless session (no desktop) or the capture "
+                    "is not delivering; live-capture assertions NOT RUN "
+                    "in this context. Run interactive (schtasks) to "
+                    "verify.";
   }
 
   // Frame routing + dimensions: the exact physical client size at the
