@@ -105,6 +105,19 @@ if(WIN32)
                         PUBLIC rwh_core d3d11 dwmapi windowsapp dxguid)
 endif()
 
+# Win32 H.264 encoder backend (RW-H-012, H-MEDIA): in-box Media
+# Foundation H.264 encoder MFT client implementing the portable
+# core::IVideoEncoder seam (CPU BGRA in from the capture adapter,
+# annex-B access units out — the merged client decode contract).
+# Windows-only: there is no macOS port of this target (NOT RUN on
+# macOS by design).
+if(WIN32)
+  add_library(rwh_win32_video STATIC win32/video/h264_encoder_mf.cpp)
+  target_link_libraries(rwh_win32_video
+                        PUBLIC rwh_core mfplat mf mfuuid d3d11 dxgi
+                        ole32 oleaut32)
+endif()
+
 # Windows Host application shell (H-FOUND, plan section 4.1). Console
 # subsystem (selftest output must be capturable by the build/test runner);
 # Win32 + .rc resources, MSVC only.

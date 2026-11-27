@@ -28,6 +28,7 @@
 
 #include "win32/capture/WgcCaptureSource.hpp"
 #include "win32/windows/Win32WindowSource.hpp"  // win32::HwndKey
+#include "win32/video/h264_encoder_mf.hpp"
 
 #include "app/Win32Env.hpp"
 
@@ -59,10 +60,17 @@ namespace {
 // counts / sizes / ids — never pixels.
 bool g_diag = false;
 
+// RW-H-012 live mode: `--wgc-h264` (parsed in main before gtest)
+// enables the live WGC -> REAL Media Foundation H.264 backend test
+// (WgcCaptureH264.LiveWgcEncodeToH264). Without the flag that test
+// GTEST_SKIPs, so the default hermetic run is unchanged.
+bool g_h264 = false;
+
 constexpr int kClientW = 320;
 constexpr int kClientH = 200;
 constexpr uint64_t kFrameTimeoutMs = 15000;  // bounded: never hangs
 const char kTestId[] = "6f9c3a2e-1b4d-4c7a-9e2f-8a3d5b7c9e01";  // v4-style
+const char kTestId2[] = "6f9c3a2e-1b4d-4c7a-9e2f-8a3d5b7c9e02";  // RW-H-012
 const wchar_t kTestClass[] = L"RWH_WGC_TEST_WINDOW";  // WNDCLASSEXW form
 
 // ------------------------------------------------------ test window
@@ -401,15 +409,230 @@ TEST(WgcCapture, HermeticConsentGatedPipeline) {
   ::DestroyWindow(hwnd);
 }
 
+// ------------------------------------------------------- RW-H-012: live
+// WGC -> REAL Media Foundation H.264 backend (enabled via
+// `--wgc-h264`, interactive session). Same hermetic model as the test
+// above (own window, consent gate, bounded waits) but the encoder
+// factory is the real win32::MfH264EncoderFactory: the full seam path
+// (WGC pixels -> IVideoEncoder -> annex-B access units) is exercised
+// with the production backend. Prints the measured encoder type,
+// per-frame size/fps/timing and NAL facts (structured values only).
+
+namespace {
+
+struct LiveFrameFact {
+  uint32_t frame_seq = 0;
+  bool keyframe = false;
+  size_t bytes = 0;
+  bool annex_b_valid = false;
+  bool has_sps = false, has_pps = false, has_idr = false;
+  uint64_t arrived_ms = 0;  // steady_clock, for inter-frame timing
+};
+
+class LiveH264Sink final : public core::IEncodedFrameConsumer {
+ public:
+  void onEncodedFrame(const core::EncodedFrame& frame) override {
+    LiveFrameFact f;
+    f.frame_seq = frame.frame_seq;
+    f.keyframe = frame.keyframe;
+    f.bytes = frame.payload.size();
+    f.arrived_ms = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count());
+    const auto& p = frame.payload;
+    const uint8_t* d = p.data();
+    const size_t n = p.size();
+    for (size_t i = 0; i + 3 < n; i++) {
+      size_t sc = 0;
+      if (d[i] == 0 && d[i + 1] == 0 && d[i + 2] == 1) sc = 3;
+      if (i + 4 < n && d[i] == 0 && d[i + 1] == 0 && d[i + 2] == 0 &&
+          d[i + 3] == 1) sc = 4;
+      if (sc == 0) continue;
+      if (i + sc < n) {
+        const uint32_t t = d[i + sc] & 0x1F;
+        if (t == 1 || t == 5 || t == 6 || t == 7 || t == 8 || t == 9) {
+          f.annex_b_valid = true;
+          if (t == 7) f.has_sps = true;
+          if (t == 8) f.has_pps = true;
+          if (t == 5) f.has_idr = true;
+        }
+      }
+      i += sc;
+    }
+    std::lock_guard<std::mutex> lk(mu_);
+    frames_.push_back(f);
+  }
+  void onEncoderError(const std::string&, const std::string& reason) override {
+    std::lock_guard<std::mutex> lk(mu_);
+    if (first_error_.empty()) first_error_ = reason;
+  }
+  size_t count() {
+    std::lock_guard<std::mutex> lk(mu_);
+    return frames_.size();
+  }
+  LiveFrameFact at(size_t i) {
+    std::lock_guard<std::mutex> lk(mu_);
+    return frames_[i];
+  }
+  std::string firstError() {
+    std::lock_guard<std::mutex> lk(mu_);
+    return first_error_;
+  }
+
+ private:
+  mutable std::mutex mu_;
+  std::vector<LiveFrameFact> frames_;
+  std::string first_error_;
+};
+
+class LiveMfFactory final : public win32::MfH264EncoderFactory {
+ public:
+  std::unique_ptr<core::IVideoEncoder> create(
+      const std::string& window_id, core::IEncodedFrameConsumer& sink) override {
+    auto e = std::make_unique<win32::MfH264Encoder>(window_id, sink);
+    last = e.get();  // raw: valid while the manager owns the encoder
+    return e;
+  }
+  win32::MfH264Encoder* last = nullptr;
+};
+
+}  // namespace
+
+TEST(WgcCaptureH264, LiveWgcEncodeToH264) {
+  if (!g_h264) {
+    GTEST_SKIP() << "live H.264 mode not requested (run with "
+                    "--wgc-h264, interactive session via schtasks)";
+  }
+  winrt::init_apartment(winrt::apartment_type::multi_threaded);
+  HWND hwnd = CreateTestWindow();
+  ASSERT_TRUE(hwnd != nullptr) << "test window creation failed";
+
+  UINT dpi = ::GetDpiForWindow(hwnd);
+  if (dpi == 0) dpi = 96;
+  const uint32_t dpi_u = static_cast<uint32_t>(dpi);
+  const uint32_t dpi_pct = (dpi_u * 100 + 95) / 96;
+  const uint32_t phys_w =
+      static_cast<uint32_t>((static_cast<int64_t>(kClientW) * dpi_u + 95) / 96);
+  const uint32_t phys_h =
+      static_cast<uint32_t>((static_cast<int64_t>(kClientH) * dpi_u + 95) / 96);
+
+  LiveMfFactory factory;
+  LiveH264Sink sink;
+  win32::WgcCaptureSource source;
+  core::CaptureSessionManager mgr(source, factory, sink);
+
+  core::WindowRecord rec;
+  rec.window_id = kTestId2;
+  rec.hwnd = win32::HwndKey(hwnd);
+  rec.width_px = phys_w;
+  rec.height_px = phys_h;
+  rec.dpi_scale_percent = dpi_pct;
+  rec.minimized = false;
+  rec.visible = true;
+  rec.surface_kind = core::WindowSurfaceKind::IndependentTopLevel;
+  rec.app_session_id = "rwh-h264-live";
+
+  const core::CaptureError err = mgr.shareWindow(rec);
+  if (err == core::CaptureError::ConsentRequired) {
+    mgr.unshareWindow(kTestId2);
+    ::DestroyWindow(hwnd);
+    GTEST_SKIP() << "capture consent not granted (USER ACTION required)";
+  }
+  ASSERT_EQ(err, core::CaptureError::None)
+      << "shareWindow failed; encoder detail: " << sink.firstError();
+  ASSERT_EQ(mgr.stateOf(kTestId2), core::CaptureSessionState::Running);
+
+  // The manager drives start() (real MFT probe + smoke) and
+  // requestKeyframe() per the seam contract. Bounded wait for >=5
+  // REAL encoded frames (window repaints every ~250 ms).
+  bool got_frames = false;
+  const auto frame_deadline = std::chrono::steady_clock::now() +
+                              std::chrono::milliseconds(30000);
+  auto last_repaint = std::chrono::steady_clock::now();
+  while (!got_frames) {
+    got_frames = sink.count() >= 5;
+    const auto now = std::chrono::steady_clock::now();
+    if (got_frames || now >= frame_deadline) break;
+    if (now - last_repaint >= std::chrono::milliseconds(250)) {
+      last_repaint = now;
+      ::RedrawWindow(hwnd, nullptr, nullptr,
+                     RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  if (!got_frames) {
+    mgr.unshareWindow(kTestId2);
+    ::DestroyWindow(hwnd);
+    GTEST_SKIP() << "fewer than 5 encoded frames within 30 s (no working "
+                    "in-box H.264 encoder in this session context, or "
+                    "capture not delivering); encoder detail: "
+                 << sink.firstError();
+  }
+
+  // NAL assertions on the REAL frames (pinned layout: annex-B, SPS+PPS
+  // in-band in the first keyframe).
+  ASSERT_GE(sink.count(), 5u);
+  const auto f0 = sink.at(0);
+  EXPECT_TRUE(f0.keyframe) << "first encoded frame must be a keyframe";
+  EXPECT_TRUE(f0.annex_b_valid) << "first frame not valid annex-B";
+  EXPECT_TRUE(f0.has_sps) << "first keyframe lacks in-band SPS";
+  EXPECT_TRUE(f0.has_pps) << "first keyframe lacks in-band PPS";
+  EXPECT_TRUE(f0.has_idr) << "first keyframe lacks an IDR slice";
+  std::fprintf(stderr,
+               "[wgc-h264] window_id=%s window=%ux%u phys=%ux%u dpi_pct=%u "
+               "frames=%llu\n",
+               kTestId2, kClientW, kClientH, phys_w, phys_h, dpi_pct,
+               static_cast<unsigned long long>(sink.count()));
+  for (size_t i = 0; i < sink.count(); i++) {
+    const auto f = sink.at(i);
+    const uint64_t dt =
+        (i == 0) ? 0 : (f.arrived_ms - sink.at(i - 1).arrived_ms);
+    std::fprintf(stderr,
+                 "[wgc-h264] frame=%u keyframe=%d bytes=%zu "
+                 "annex_b=%d sps=%d pps=%d idr=%d dt_ms=%llu\n",
+                 f.frame_seq, f.keyframe ? 1 : 0, f.bytes,
+                 f.annex_b_valid ? 1 : 0, f.has_sps ? 1 : 0,
+                 f.has_pps ? 1 : 0, f.has_idr ? 1 : 0,
+                 static_cast<unsigned long long>(dt));
+    EXPECT_TRUE(f.annex_b_valid) << "frame " << i << " not annex-B";
+    EXPECT_GT(f.bytes, 0u);
+  }
+  // Measured encoder type (structured: the friendly name of the MFT the
+  // backend actually selected — read BEFORE unshare destroys it).
+  const auto m = mgr.metrics(kTestId2);
+  const std::string measured =
+      factory.last ? factory.last->selectedEncoder() : "(none)";
+  std::fprintf(stderr,
+               "[wgc-h264] measured encoder=%s window_id=%s "
+               "frames_received=%llu frames_delivered=%llu "
+               "keyframe_requests=%llu\n",
+               measured.c_str(), kTestId2,
+               static_cast<unsigned long long>(m.frames_received),
+               static_cast<unsigned long long>(m.frames_delivered),
+               static_cast<unsigned long long>(m.keyframe_requests));
+
+  // Stop: clean release (the manager stops the encoder; the backend's
+  // destructor path is exercised by unshare).
+  const core::CaptureError ue = mgr.unshareWindow(kTestId2);
+  EXPECT_EQ(ue, core::CaptureError::None);
+  EXPECT_EQ(mgr.stateOf(kTestId2), core::CaptureSessionState::Inactive);
+  ASSERT_TRUE(
+      WaitFor([&source] { return source.surfaceCount() == 0u; }, 5000));
+  ::DestroyWindow(hwnd);
+}
+
 int main(int argc, char** argv) {
   // RW-H-011b: strip --wgc-diag BEFORE gtest parses argv (gtest would
-  // reject the unknown flag).
+  // reject the unknown flag). RW-H-012: same for --wgc-h264.
   for (int i = 1; i < argc; ++i) {
-    if (std::string(argv[i]) == "--wgc-diag") {
-      g_diag = true;
+    const std::string arg = argv[i];
+    if (arg == "--wgc-diag" || arg == "--wgc-h264") {
+      if (arg == "--wgc-diag") g_diag = true;
+      if (arg == "--wgc-h264") g_h264 = true;
       for (int j = i; j < argc - 1; ++j) argv[j] = argv[j + 1];
       --argc;
-      break;
+      --i;
     }
   }
   ::testing::InitGoogleTest(&argc, argv);

@@ -112,9 +112,28 @@ if(WIN32)
   target_link_libraries(win32_wgc_capture_test PRIVATE
     rwh_win32_capture
     rwh_win32_windows
+    rwh_win32_video
     GTest::gtest
     Threads::Threads
     gdi32
     user32)
   gtest_discover_tests(win32_wgc_capture_test DISCOVERY_TIMEOUT 30)
+endif()
+
+# Win32 H.264 encoder backend tests (RW-H-012, H-MEDIA). Created ONLY
+# on Windows: win32/video/*.cpp (and this test) must NOT compile on
+# macOS. Session-context dependent (measured): the availability test
+# ALWAYS runs and reports the measured candidate list; the encode
+# tests GTEST_SKIP with a clear reason when no in-box encoder produces
+# output in this session context (headless session 0) — the full
+# byte-level path is verified interactively via schtasks. All waits
+# are bounded (the test can never hang).
+if(WIN32)
+  add_executable(win32_h264_encoder_test win32_h264_encoder_test.cpp)
+  target_link_libraries(win32_h264_encoder_test PRIVATE
+    rwh_win32_video
+    GTest::gtest
+    GTest::gtest_main
+    Threads::Threads)
+  gtest_discover_tests(win32_h264_encoder_test DISCOVERY_TIMEOUT 30)
 endif()
