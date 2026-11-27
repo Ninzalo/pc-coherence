@@ -305,7 +305,7 @@ struct Win32WindowSource::Impl {
   }
 };
 
-Impl* Win32WindowSource::Impl::active = nullptr;
+Win32WindowSource::Impl* Win32WindowSource::Impl::active = nullptr;
 
 Win32WindowSource::Win32WindowSource(Options opts)
     : impl_(std::make_unique<Impl>(std::move(opts))) {}
@@ -313,7 +313,8 @@ Win32WindowSource::Win32WindowSource(Options opts)
 Win32WindowSource::~Win32WindowSource() { stop(); }
 
 bool Win32WindowSource::start(WindowSourceSink& sink) {
-  if (impl_->running || Impl::active) return false;  // one per process
+  if (impl_->running.load() || Win32WindowSource::Impl::active)
+    return false;  // one per process
   Impl::active = impl_.get();
   impl_->sink = &sink;
   try {
@@ -346,9 +347,9 @@ bool Win32WindowSource::running() const { return impl_->running; }
 bool Win32WindowSource::ready() const { return impl_->ready; }
 
 void Win32WindowSource::requestScan() {
-  if (!impl_->running) return;
+  if (!impl_->running.load()) return;
   const DWORD tid = impl_->thread_id;
-  if (tid != 0) PostThreadMessageW(tid, kScanNowMsg, 0, 0);
+  if (tid != 0) PostThreadMessageW(tid, impl_->kScanNowMsg, 0, 0);
 }
 
 }  // namespace remotewindows::win32

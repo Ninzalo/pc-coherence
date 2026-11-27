@@ -165,13 +165,15 @@ class Win32WindowsRegistryTest : public ::testing::Test {
 
   HWND CreateTopLevel(const std::wstring& title, DWORD extra_style,
                       HWND owner, int x, int y, int w, int h) {
-    HWND h = CreateWindowExW(
+    // EXPECT (not ASSERT) — ASSERT_* macros expand to a bare return and
+    // cannot appear in a non-void helper.
+    HWND hw = CreateWindowExW(
         0, class_name_.c_str(), title.c_str(),
         WS_OVERLAPPEDWINDOW | extra_style, x, y, w, h, owner, nullptr,
         GetModuleHandleW(nullptr), nullptr);
-    ASSERT_NE(h, nullptr);
-    created_.push_back(h);
-    return h;
+    EXPECT_NE(hw, nullptr);
+    created_.push_back(hw);
+    return hw;
   }
 
   void StartSource() {
@@ -184,8 +186,10 @@ class Win32WindowsRegistryTest : public ::testing::Test {
     bool ok = WaitUntil([&] {
       return registry_.findByHwnd(key).has_value();
     }, timeout_ms);
-    ASSERT_TRUE(ok) << "window " << key << " was never tracked";
-    return *registry_.findByHwnd(key);
+    if (!ok) ADD_FAILURE() << "window " << key << " was never tracked";
+    auto rec = registry_.findByHwnd(key);
+    if (!rec) return core::WindowRecord{};  // failure already recorded
+    return *rec;
   }
 };
 
