@@ -53,6 +53,11 @@
 //     winrt::event_registration in this SDK's cppwinrt.
 //   * Errors: winrt::hresult_error::code() (this cppwinrt has no
 //     hresult_error::to_hresult member).
+//   * SDK 26100 D3D11 rework (verified 2026-11-27 against the
+//     installed um/d3d11.h): ID3D11DeviceContext::CopyResource (and
+//     peers like UpdateSubresource) now return void and throw on
+//     failure — HRESULT checks do NOT compile (C2440). The frame
+//     handler catches, counts (copy_failures) and skips the frame.
 //   * Consent: GraphicsCaptureAccess::RequestAccessAsync(Programmatic)
 //     → IAsyncOperation<AppCapabilityAccessStatus>; polled via
 //     IAsyncInfo::Status() with a bounded 2 s deadline (the OS prompt
@@ -478,8 +483,13 @@ core::CaptureError WgcCaptureSource::startOnThread(Surface& s) {
           s.staging_h = static_cast<uint32_t>(h);
         }
         // Bounded copy: this window's frame only (no full-screen
-        // readback), row pitch handled.
-        if (FAILED(s.ctx->CopyResource(s.staging.get(), texture))) {
+        // readback), row pitch handled. SDK 26100 (verified 2026-11-27
+        // against the installed d3d11.h): CopyResource now returns
+        // void and THROWS on failure — catch, count, skip the frame
+        // (same policy as the QI/Map failure points below).
+        try {
+          s.ctx->CopyResource(s.staging.get(), texture);
+        } catch (...) {
           texture->Release();
           s.copy_failures.fetch_add(1);
           return;
