@@ -181,6 +181,16 @@ class Win32WindowsRegistryTest : public ::testing::Test {
     ASSERT_TRUE(WaitUntil([&] { return source_.ready(); }, 5000));
   }
 
+  // A window created on this thread is only realized (visible,
+  // minimizable, enableable) once this thread processes its message
+  // queue — WAITUNTIL PUMPS, so waiting on the real Win32 state is
+  // what completes the creation; the SHOW/STATECHANGE WinEvents
+  // (and the registry's updates for them) follow.
+  void AwaitVisible(HWND h, int timeout_ms = 15000) {
+    ASSERT_TRUE(WaitUntil([&] { return IsWindowVisible(h); }, timeout_ms))
+        << "window never became visible";
+  }
+
   core::WindowRecord AwaitTracked(HWND h, int timeout_ms = 15000) {
     const std::string key = win32::HwndKey(h);
     bool ok = WaitUntil([&] {
@@ -201,8 +211,15 @@ TEST_F(Win32WindowsRegistryTest, AnnouncesOwnTopLevelWithUuidIdentityAndGeometry
       std::to_string(static_cast<unsigned long>(GetCurrentProcessId()));
   const std::wstring wtitle(title.begin(), title.end());  // ASCII
   HWND main = CreateTopLevel(wtitle, WS_VISIBLE, nullptr, 100, 100, 400, 300);
-
-  const core::WindowRecord rec = AwaitTracked(main);
+  AwaitTracked(main);
+  AwaitVisible(main);
+  // Wait for the registry to catch up to the shown state (SHOW event
+  // or the reconciliation scan — both flow after the window is shown).
+  ASSERT_TRUE(WaitUntil([&] {
+    auto r = registry_.findByHwnd(win32::HwndKey(main));
+    return r && r->visible && r->z_order_rank >= 0;
+  }));
+  const core::WindowRecord rec = *registry_.findByHwnd(win32::HwndKey(main));
   EXPECT_TRUE(IsUuid(rec.window_id));
   EXPECT_EQ(rec.pid, static_cast<uint32_t>(GetCurrentProcessId()));
   EXPECT_EQ(rec.tid, static_cast<uint32_t>(GetCurrentThreadId()));
@@ -237,13 +254,25 @@ TEST_F(Win32WindowsRegistryTest, OwnedDialogCorrelatesWithSessionOwnerAndModalit
   registry_.registerSession("sess-int", pid, {pid});
   HWND main = CreateTopLevel(L"RWH-Test-Parent", WS_VISIBLE, nullptr,
                              100, 100, 400, 300);
-  const core::WindowRecord parent = AwaitTracked(main);
+  AwaitTracked(main);
+  AwaitVisible(main);
+  HWND dialog = CreateTopLevel(L"RWH-Test-Dialog", WS_POPUP | WS_VISIBLE,
+                               main, 200, 200, 300, 200);
+  AwaitTracked(dialog);
+  AwaitVisible(dialog);
+  ASSERT_TRUE(WaitUntil([&] {
+    auto d = registry_.findByHwnd(win32::HwndKey(dialog));
+    auto p = registry_.findByHwnd(win32::HwndKey(main));
+    return d && p && d->visible && p->visible &&
+           d->z_order_rank >= 0 && p->z_order_rank >= 0;
+  }));
+  const core::WindowRecord parent =
+      *registry_.findByHwnd(win32::HwndKey(main));
   EXPECT_EQ(parent.app_session_id, "sess-int");
   EXPECT_EQ(parent.role, core::WindowRole::Main);
 
-  HWND dialog = CreateTopLevel(L"RWH-Test-Dialog", WS_POPUP | WS_VISIBLE,
-                               main, 200, 200, 300, 200);
-  const core::WindowRecord drec = AwaitTracked(dialog);
+  const core::WindowRecord drec =
+      *registry_.findByHwnd(win32::HwndKey(dialog));
   EXPECT_EQ(drec.app_session_id, "sess-int");
   EXPECT_EQ(drec.role, core::WindowRole::Dialog);
   ASSERT_TRUE(drec.owner_window_id.has_value());
@@ -263,10 +292,14 @@ TEST_F(Win32WindowsRegistryTest, DisablingOwnerTransitionsDialogToAppModal) {
   HWND main = CreateTopLevel(L"RWH-Test-Parent", WS_VISIBLE, nullptr,
                              100, 100, 400, 300);
   AwaitTracked(main);
+  AwaitVisible(main);
   HWND dialog = CreateTopLevel(L"RWH-Test-Dialog", WS_POPUP | WS_VISIBLE,
                                main, 200, 200, 300, 200);
-  const core::WindowRecord drec = AwaitTracked(dialog);
-  ASSERT_EQ(drec.modality, core::WindowModality::WindowModal);
+  AwaitTracked(dialog);
+  AwaitVisible(dialog);
+  const auto drec0 = registry_.findByHwnd(win32::HwndKey(dialog));
+  ASSERT_TRUE(drec0.has_value());
+  ASSERT_EQ(drec0->modality, core::WindowModality::WindowModal);
 
   EXPECT_TRUE(EnableWindow(main, FALSE));
   ASSERT_TRUE(WaitUntil([&] {
@@ -288,10 +321,16 @@ TEST_F(Win32WindowsRegistryTest, DestroyingDialogRemovesOnlyTheDialog) {
   registry_.registerSession("sess-int", pid, {pid});
   HWND main = CreateTopLevel(L"RWH-Test-Parent", WS_VISIBLE, nullptr,
                              100, 100, 400, 300);
-  const core::WindowRecord parent = AwaitTracked(main);
+  AwaitTracked(main);
+  AwaitVisible(main);
   HWND dialog = CreateTopLevel(L"RWH-Test-Dialog", WS_POPUP | WS_VISIBLE,
                                main, 200, 200, 300, 200);
-  const core::WindowRecord drec = AwaitTracked(dialog);
+  AwaitTracked(dialog);
+  AwaitVisible(dialog);
+  const core::WindowRecord parent =
+      *registry_.findByHwnd(win32::HwndKey(main));
+  const core::WindowRecord drec =
+      *registry_.findByHwnd(win32::HwndKey(dialog));
 
   ASSERT_TRUE(DestroyWindow(dialog));
   ASSERT_TRUE(WaitUntil(
@@ -333,6 +372,7 @@ TEST_F(Win32WindowsRegistryTest, TitleChangeAndMinimizeRestoreUpdateRecord) {
   HWND main = CreateTopLevel(L"RWH-Test-Rename", WS_VISIBLE, nullptr,
                              100, 100, 400, 300);
   AwaitTracked(main);
+  AwaitVisible(main);
 
   EXPECT_TRUE(SetWindowTextW(main, L"RWH-Test-Renamed"));
   ASSERT_TRUE(WaitUntil([&] {
