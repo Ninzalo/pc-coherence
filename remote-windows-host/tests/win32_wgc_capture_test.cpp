@@ -186,12 +186,17 @@ TEST(WgcCapture, HermeticConsentGatedPipeline) {
 
   // DPI: physical pixels at the window's actual scale (the frame size
   // WGC delivers must equal the client area in PHYSICAL pixels).
+  // GetDpiForWindow returns a DPI value (96 = 100%), NOT a percent:
+  // scale = dpi/96 (rounded up for the physical size; percent for the
+  // WindowRecord, also rounded up: 96→100, 120→125, 144→150).
   UINT dpi = ::GetDpiForWindow(hwnd);
-  const uint32_t dpi_pct = dpi ? (dpi + 99) / 100 : 100;
+  if (dpi == 0) dpi = 96;  // fallback: unscaled
+  const uint32_t dpi_u = static_cast<uint32_t>(dpi);
+  const uint32_t dpi_pct = (dpi_u * 100 + 95) / 96;
   const uint32_t phys_w =
-      static_cast<uint32_t>(static_cast<int64_t>(kClientW) * dpi / 100);
+      static_cast<uint32_t>((static_cast<int64_t>(kClientW) * dpi_u + 95) / 96);
   const uint32_t phys_h =
-      static_cast<uint32_t>(static_cast<int64_t>(kClientH) * dpi / 100);
+      static_cast<uint32_t>((static_cast<int64_t>(kClientH) * dpi_u + 95) / 96);
 
   FakeEncoderFactory factory;
   EncodedSink sink;

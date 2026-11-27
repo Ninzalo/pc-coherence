@@ -8,20 +8,30 @@
 //
 // Doc-check 2026-11-27 — Microsoft Learn (learn.microsoft.com) plus
 // the installed Windows SDK 10.0.26100.0 headers (cppwinrt
-// v2.0.250303.5), verified on the build runner:
-//   * Item from HWND: GraphicsCaptureItem::TryCreateFromWindowId
-//     (IGraphicsCaptureItemStatics2, Win10 2004 (19041)+) with the
-//     WindowId from DwmGetWindowAttribute(DWMWA_WINDOW_ID). The
-//     IGraphicsCaptureItemInterop::CreateForWindow path (Win10 1903+)
-//     is NOT used: SDK 26100's windows.graphics.capture.interop.h
-//     declares only the interface IID (3628E81B-3CAC-4C60-B7F4-
-//     23CE0E0C3356) — no CLSID_GraphicsCaptureItemInterop — so the
-//     interop factory CLSID is unverifiable offline; TryCreateFrom-
-//     WindowId is the documented WinRT path and exists in this SDK.
+// v2.0.250303.5), verified on the build runner AND probe-verified on
+// the runner OS build:
+//   * Item from HWND: IGraphicsCaptureItemInterop::CreateForWindow
+//     (Win10 1903+; interface uuid 3628E81B-3CAC-4C60-B7F4-
+//     23CE0E0C3356, um/Windows.Graphics.Capture.Interop.h; factory
+//     obtained via winrt::get_activation_factory<GraphicsCaptureItem,
+//     IGraphicsCaptureItemInterop>). The
+//     TryCreateFromWindowId(DWM window id) route is DEAD on the
+//     26100-era OS build: no DWM attribute in 1..64 (probed against
+//     Progman, other composited windows, and own windows) returns a
+//     nonzero window id — DwmGetWindowAttribute yields S_OK + 0 — so
+//     TryCreateFromWindowId can only get WindowId{0} and fails.
+//     CreateForWindow needs no DWM id and was probe-verified
+//     end-to-end (item creation + live frames in the interactive
+//     session).
 //   * Direct3D11CaptureFramePool::CreateFreeThreaded(IDirect3DDevice,
 //     DirectXPixelFormat, Int32 maxFrames, SizeInt32 maxDimension) —
 //     Win10 1809 (17763)+; FrameArrived is raised on the pool's internal
-//     worker thread (no message pump / DispatcherQueue needed).
+//     worker thread (no message pump / DispatcherQueue needed). The
+//     projected IDirect3DDevice is NOT obtainable by QI (26100:
+//     E_NOINTERFACE — it is an IInspectable-based projected type);
+//     it comes from the CreateDirect3D11DeviceFromDXGIDevice factory
+//     (um/Windows.Graphics.DirectX.Direct3D11.Interop.h) — see the
+//     .cpp notes.
 //   * GraphicsCaptureSession: CreateCaptureSession(item),
 //     IsBorderRequired (1809+), StartCapture(), Close(). NOTE: in
 //     SDK 26100's C++/WinRT projection the session Closed event

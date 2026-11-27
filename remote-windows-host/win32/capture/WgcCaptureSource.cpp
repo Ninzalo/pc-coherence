@@ -4,16 +4,30 @@
 // path (bounded per-window D3D11 staging copy → tight CPU BGRA8).
 //
 // SDK 10.0.26100.0 / cppwinrt v2.0.250303.5 API notes (verified
-// against the installed headers, 2026-11-27):
-//   * Item creation: GraphicsCaptureItem::TryCreateFromWindowId
-//     (IGraphicsCaptureItemStatics2, Win10 2004+) with the WindowId
-//     from DwmGetWindowAttribute(DWMWA_WINDOW_ID). The
-//     IGraphicsCaptureItemInterop::CreateForWindow path is NOT used:
-//     SDK 26100's windows.graphics.capture.interop.h declares only the
-//     interface IID (3628E81B-3CAC-4C60-B7F4-23CE0E0C3356) — no
-//     CLSID_GraphicsCaptureItemInterop — so the interop factory CLSID
-//     is unverifiable offline; TryCreateFromWindowId is the documented
-//     WinRT path and is present in this SDK.
+// against the installed headers AND probe-verified on the runner OS
+// build, 2026-11-27):
+//   * Item creation: IGraphicsCaptureItemInterop::CreateForWindow
+//     (HWND-based; interface uuid 3628E81B-3CAC-4C60-B7F4-
+//     23CE0E0C3356, um/Windows.Graphics.Capture.Interop.h; obtained
+//     via winrt::get_activation_factory<GraphicsCaptureItem,
+//     IGraphicsCaptureItemInterop>). The DWM-window-id route
+//     (DwmGetWindowAttribute + TryCreateFromWindowId) is DEAD on the
+//     26100-era OS build: no DWM attribute in 1..64 — probed against
+//     Progman, other composited windows, and own windows — returns a
+//     nonzero window id (S_OK + 0), so TryCreateFromWindowId can only
+//     get WindowId{0} and fails. CreateForWindow needs no DWM id at
+//     all and was probe-verified end-to-end (item + frames).
+//   * WGC device view: in SDK 26100 Windows::Graphics::DirectX::
+//     Direct3D11::IDirect3DDevice is a projected IInspectable-based
+//     type (NOVTABLE abi, Trim()), NOT a raw COM vtable — QI of the
+//     D3D11 device by its GUID (A37624AB-8D5F-4650-9D3E-
+//     9EAE3D9BC670) returns E_NOINTERFACE (probe-verified). The
+//     documented route: QI IDXGIDevice, then the
+//     CreateDirect3D11DeviceFromDXGIDevice(IDXGIDevice*,
+//     IInspectable**) factory (um/
+//     Windows.Graphics.DirectX.Direct3D11.Interop.h) returns the
+//     projected IInspectable; construct the projected type from the
+//     ABI pointer via take_ownership_from_abi.
 //   * Frame surface: Direct3D11CaptureFrame::Surface() (this SDK's
 //     projection name; ABI get_Surface) →
 //     Windows::Graphics::DirectX::Direct3D11::IDirect3DSurface — in
@@ -24,15 +38,11 @@
 //     IDirect3DDxgiInterfaceAccess::GetInterface (uuid
 //     A9B3D012-3DF2-4EE3-B8D1-8695F457D3C1, um/
 //     windows.graphics.directx.direct3d11.interop.h) — the documented
-//     WGC pixel path.
+//     WGC pixel path (probe-verified: 320x200 B8G8R8A8 frame read
+//     back in the interactive session).
 //   * Frame pool: Direct3D11CaptureFramePool::CreateFreeThreaded takes
-//     Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice — in
-//     SDK 26100 a projected IInspectable-based interface (NOVTABLE
-//     abi, Trim() method), NOT a COM-interop type: com_ptr<> does not
-//     apply (C2440 at operator*); the projected type is constructed
-//     directly from the ABI pointer returned by QI (A37624AB-8D5F-
-//     4650-9D3E-9EAE3D9BC670) on the D3D11 device via its
-//     take_ownership_from_abi constructor. There is NO
+//     Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice (the
+//     projected type obtained via the factory above). There is NO
 //     IsCreationDenied member in this SDK and NO session/item Closed
 //     events in the projection — a vanished/occluded source is
 //     detected via consecutive TryGetNextFrame()==nullptr (registry
@@ -64,15 +74,20 @@
 #include "app/Win32Env.hpp"
 
 #include <d3d11.h>
-#include <dwmapi.h>
 // Raw COM interop header (SDK 26100): declares
 // IDirect3DDxgiInterfaceAccess (uuid A9B3D012-3DF2-4EE3-B8D1-
 // 8695F457D3C1) — the documented way to obtain the DXGI/D3D11
-// interfaces from a WGC frame surface. In this SDK the header no
-// longer declares the raw COM IDirect3DDevice/IDirect3DSurface
-// interfaces (they are IInspectable-based projected types in
-// cppwinrt; see the notes above).
+// interfaces from a WGC frame surface — and the
+// CreateDirect3D11DeviceFromDXGIDevice(IDXGIDevice*, IInspectable**)
+// factory that yields the projected WGC device view (the 26100 rework
+// removed the raw COM IDirect3DDevice/IDirect3DSurface interfaces;
+// see the notes above).
 #include <windows.graphics.directx.direct3d11.interop.h>
+// HWND-based capture-item interop (SDK 26100):
+// IGraphicsCaptureItemInterop (uuid 3628E81B-3CAC-4C60-B7F4-
+// 23CE0E0C3356) — the working item-creation path on this OS build
+// (the DWM window-id route is dead; see the notes above).
+#include <windows.graphics.capture.interop.h>
 
 #include <winrt/base.h>
 #include <winrt/Windows.Foundation.h>
@@ -94,7 +109,6 @@ using winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice;
 using winrt::Windows::Graphics::DirectX::DirectXPixelFormat;
 using winrt::Windows::Graphics::SizeInt32;
 using winrt::Windows::Security::Authorization::AppCapabilityAccess::AppCapabilityAccessStatus;
-using winrt::Windows::UI::WindowId;
 
 // Consecutive null TryGetNextFrame results before the surface reports
 // SourceClosed (creation denied or item gone; no IsCreationDenied /
@@ -109,15 +123,6 @@ uint64_t monotonicUs() {
           std::chrono::steady_clock::now().time_since_epoch())
           .count());
 }
-
-// DWMWA_WINDOW_ID: the documented DWMWINDOWATTRIBUTE value 14 (since
-// Win10 1607). SDK 10.0.26100.0 no longer exposes the named constant
-// (dwmcore.h is gone and dwmapi.h's reworked DWMWINDOWATTRIBUTE enum
-// does not list it — verified on the runner 2026-11-27), but the OS
-// DwmGetWindowAttribute value is stable; use the documented number.
-#ifndef DWMWA_WINDOW_ID
-#define DWMWA_WINDOW_ID 14
-#endif
 
 // The Win32 HWND token is "0x%llX" (win32/windows/Win32WindowSource.cpp
 // HwndKeyImpl); parse it back. Unparseable tokens → nullptr.
@@ -245,23 +250,36 @@ core::CaptureError WgcCaptureSource::consentGate() {
 core::CaptureError WgcCaptureSource::startOnThread(Surface& s) {
   using core::CaptureError;
   try {
-    // 1. Item for the HWND via the DWM window id (Win10 2004+).
-    UINT64 window_id = 0;
-    if (FAILED(DwmGetWindowAttribute(
-            s.hwnd, DWMWA_WINDOW_ID, &window_id, sizeof(window_id)))) {
-      return IsWindow(s.hwnd) ? CaptureError::SourceUnavailable
-                              : CaptureError::SourceClosed;
-    }
+    // 1. Item for the HWND via the HWND-based interop factory.
+    //    (The DWM-window-id route is dead on the 26100-era OS build —
+    //    see the file-header notes; CreateForWindow needs no DWM id.)
     GraphicsCaptureItem item = nullptr;
-    try {
-      item = GraphicsCaptureItem::TryCreateFromWindowId(
-          WindowId{window_id});
-    } catch (...) {
-      item = nullptr;
+    {
+      winrt::com_ptr<IGraphicsCaptureItemInterop> item_factory;
+      try {
+        item_factory = winrt::get_activation_factory<
+            winrt::Windows::Graphics::Capture::GraphicsCaptureItem,
+            IGraphicsCaptureItemInterop>();
+      } catch (...) {
+        item_factory = nullptr;
+      }
+      void* raw_item = nullptr;
+      const HRESULT chr = item_factory
+          ? item_factory->CreateForWindow(
+                s.hwnd,
+                winrt::guid_of<
+                    winrt::Windows::Graphics::Capture::GraphicsCaptureItem>(),
+                &raw_item)
+          : winrt::hresult(E_NOINTERFACE);
+      if (SUCCEEDED(chr) && raw_item) {
+        item =
+            GraphicsCaptureItem(raw_item, winrt::take_ownership_from_abi);
+      }
     }
     if (!item) {
-      // The window vanished between the IsWindow check and now, or the
-      // surface cannot be captured at all.
+      // The window vanished between the IsWindow check and now, the
+      // interop factory is unavailable, or the surface cannot be
+      // captured at all.
       return IsWindow(s.hwnd) ? CaptureError::SourceUnavailable
                               : CaptureError::SourceClosed;
     }
@@ -278,18 +296,27 @@ core::CaptureError WgcCaptureSource::startOnThread(Surface& s) {
     }
     if (FAILED(hr) || !s.device || !s.ctx) return CaptureError::InternalError;
 
-    void* wgc_device = nullptr;
-    hr = s.device->QueryInterface(winrt::guid_of<IDirect3DDevice>(),
-                                  &wgc_device);
-    if (FAILED(hr) || !wgc_device) return CaptureError::InternalError;
-    // SDK 26100 (2026 rework, runner-verified): winrt's
-    // IDirect3DDevice is a projected IInspectable-based interface
-    // (NOVTABLE abi exposing Trim()), NOT a COM-interop type —
-    // com_ptr<> no longer applies (C2440 at operator*). Construct
-    // the projected type directly from the ABI pointer via its
-    // public take-ownership constructor (the pool takes its own
-    // reference; the local releases at scope exit).
-    IDirect3DDevice device_view(wgc_device, winrt::take_ownership_from_abi);
+    // SDK 26100 (2026 rework, probe-verified): the projected
+    // IDirect3DDevice is an IInspectable-based projected type, NOT a
+    // raw COM vtable — QI of the D3D11 device by its GUID returns
+    // E_NOINTERFACE. The documented route: QI IDXGIDevice, then the
+    // CreateDirect3D11DeviceFromDXGIDevice factory (um/
+    // Windows.Graphics.DirectX.Direct3D11.Interop.h) yields the
+    // projected IInspectable; construct the projected type via its
+    // take_ownership_from_abi constructor (the pool takes its own
+    // reference).
+    IDXGIDevice* dxgi_raw = nullptr;
+    hr = s.device->QueryInterface(IID_IDXGIDevice,
+                                  reinterpret_cast<void**>(&dxgi_raw));
+    winrt::com_ptr<IDXGIDevice> dxgi_device;
+    dxgi_device.attach(dxgi_raw);  // takes ownership of the QI reference
+    if (FAILED(hr) || !dxgi_device) return CaptureError::InternalError;
+    IInspectable* wgc_device_raw = nullptr;
+    hr = CreateDirect3D11DeviceFromDXGIDevice(dxgi_device.get(),
+                                              &wgc_device_raw);
+    if (FAILED(hr) || !wgc_device_raw) return CaptureError::InternalError;
+    IDirect3DDevice device_view(
+        wgc_device_raw, winrt::take_ownership_from_abi);
 
     // 3. Free-threaded frame pool (Win10 1809+): FrameArrived fires on
     //    the pool's internal worker thread — no message pump needed.
@@ -454,8 +481,17 @@ void WgcCaptureSource::reportOnce(Surface& s, core::CaptureError error) {
 }
 
 void WgcCaptureSource::surfaceWorker(Surface& s) {
-  winrt::init_apartment(winrt::apartment_type::multi_threaded);
-  const core::CaptureError err = startOnThread(s);
+  core::CaptureError err;
+  bool init_ok = true;
+  try {
+    winrt::init_apartment(winrt::apartment_type::multi_threaded);
+  } catch (...) {
+    // WinRT/COM unavailable on this thread: a typed error instead of
+    // an uncaught exception (std::terminate would kill the whole
+    // process — the worker must never take the app down).
+    init_ok = false;
+  }
+  err = init_ok ? startOnThread(s) : core::CaptureError::InternalError;
   {
     std::lock_guard<std::mutex> lk(s.start_mu);
     s.start_err = err;
