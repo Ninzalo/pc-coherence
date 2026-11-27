@@ -50,12 +50,20 @@ void SignalingServer::stop() {
   }
   if (accept_thread_.joinable()) accept_thread_.join();
   std::vector<std::shared_ptr<Connection>> snapshot;
+  std::vector<std::thread> workers;
   {
     std::lock_guard<std::mutex> lk(conns_mutex_);
     snapshot = conns_;
     conns_.clear();
+    workers = std::move(workers_);
   }
+  // Close the connection sockets first so any worker blocked in recv()
+  // wakes up immediately, then join every per-connection worker (the
+  // poke connection above spawns one as well). After this point no
+  // worker can touch this server or the handler — safe to destroy.
   for (auto& c : snapshot) c->socket_.close();
+  for (auto& t : workers)
+    if (t.joinable()) t.join();
 }
 
 bool SignalingServer::isRunning() const { return running_; }
@@ -77,12 +85,15 @@ void SignalingServer::acceptLoop() {
       continue;
     }
     auto conn = std::make_shared<Connection>(std::move(*sock), this);
+    // Tracked (not detached): stop() joins all workers, so none can
+    // outlive the server object or its handler (RW-H-013).
+    auto worker = std::thread([this, conn] { connectionLoop(conn); });
     {
       std::lock_guard<std::mutex> lk(conns_mutex_);
       conns_.push_back(conn);
+      workers_.push_back(std::move(worker));
     }
     if (handler_) handler_->onConnection(*conn);
-    std::thread([this, conn] { connectionLoop(conn); }).detach();
   }
 }
 
@@ -117,6 +128,11 @@ void SignalingServer::connectionLoop(std::shared_ptr<Connection> conn) {
         conns_.erase(it);
         break;
       }
+    // NOTE: this worker does NOT erase its own handle from workers_: a
+    // joinable std::thread handle may only be destroyed after join()
+    // (destroying it live calls std::terminate). stop() owns the join
+    // and clears the list; exited-but-unjoined handles are reaped there
+    // (joining an already-finished thread returns immediately).
   }
 }
 

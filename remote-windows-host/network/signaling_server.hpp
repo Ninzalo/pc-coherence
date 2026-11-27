@@ -35,8 +35,15 @@ class SignalingServer {
   explicit SignalingServer(Handler* handler);
   ~SignalingServer();
 
+  // The handler must outlive the server (or outlive the last stop()):
+  // worker threads call back into it until stop() returns.
   bool start(const std::string& addr, uint16_t port, std::string& err);
   uint16_t port(std::string& err);
+  // Stops the listener, closes all connections and JOINS every
+  // per-connection worker thread. When stop() returns, no worker can
+  // still touch this server or the handler (the previous detached-thread
+  // design let workers outlive stop()/destruction and crash on the freed
+  // handler; RW-H-013).
   void stop();
   bool isRunning() const;
   size_t connectionCount() const;
@@ -53,6 +60,12 @@ class SignalingServer {
   TcpSocket listener_;
   mutable std::mutex conns_mutex_;
   std::vector<std::shared_ptr<Connection>> conns_;
+  // Per-connection worker threads, tracked (never detached). A worker
+  // may exit before stop() without removing its handle: stop() joins
+  // every entry (joining an already-finished thread returns immediately)
+  // and leaves the list empty, so it cannot grow unbounded between
+  // start()/stop() cycles.
+  std::vector<std::thread> workers_;
   std::atomic<uint64_t> malformed_{0};
   std::atomic<uint64_t> envelopes_{0};
 };
