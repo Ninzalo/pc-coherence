@@ -44,6 +44,20 @@ final class AppController: NSObject, NSWindowDelegate,
     private var mediaChannel: MediaChannel?
     private var mediaStatusLabel: NSTextField!
 
+    // Keyboard shortcut adaptation (RW-C-004, role C-INPUT): the
+    // settings model (master/built-in/custom toggles + CRUD, persisted)
+    // and the `ShortcutAdaptationService` seam. The service is NOT
+    // wired to any key forwarding yet — that needs the C-WINDOWS/H-INPUT
+    // pipeline (plan dependency gate). What IS wired: input-state
+    // hygiene — `service.reset()` on disconnect and on window focus
+    // loss (FR-07/8.1: no key may remain logically pressed). Production
+    // stores in `.standard` UserDefaults (the injected `preferences`
+    // default; a non-standard test preferences would need a matching
+    // store injected via the model initializer).
+    private let shortcutsModel: KeyboardShortcutsSettingsModel
+    private var shortcutsToggleButton: NSButton!
+    private var shortcutsSection: NSStackView!
+
     private static let catalogNameColumnID = NSUserInterfaceItemIdentifier("catalog.name")
     private static let catalogStatusColumnID = NSUserInterfaceItemIdentifier("catalog.status")
 
@@ -56,6 +70,8 @@ final class AppController: NSObject, NSWindowDelegate,
             transport: NWSignalingTransport(),
             config: .init(appVersion: AppController.clientVersion))
         self.client = wiredClient
+        self.shortcutsModel = KeyboardShortcutsSettingsModel(
+            preferences: preferences, store: CustomShortcutStore())
         super.init()
         // Transport callbacks may arrive off the main queue — hop.
         wiredClient.onStateChanged = { [weak self] _ in
@@ -157,8 +173,22 @@ final class AppController: NSObject, NSWindowDelegate,
 
         let catalogSection = makeCatalogSection()
 
+        // Keyboard Shortcuts section (RW-C-004): hidden until the user
+        // opens it from the toggle button (plan §6.1: Settings →
+        // Keyboard Shortcuts).
+        shortcutsToggleButton = makeButton(
+            L10n.t("shortcuts.section.title"),
+            action: #selector(toggleShortcutsSection))
+        shortcutsSection = NSStackView(
+            views: [KeyboardShortcutsSettingsView(model: shortcutsModel)])
+        shortcutsSection.orientation = .vertical
+        shortcutsSection.alignment = .leading
+        shortcutsSection.spacing = 8
+        shortcutsSection.isHidden = true
+
         [title, version, hostRow, codeRow, stateLabel, hostNameLabel,
-         mediaStatusLabel, catalogSection]
+         mediaStatusLabel, shortcutsToggleButton, shortcutsSection,
+         catalogSection]
             .forEach { stack.addArrangedSubview($0) }
 
         let content = win.contentView!
@@ -253,6 +283,11 @@ final class AppController: NSObject, NSWindowDelegate,
         client.disconnect()
     }
 
+    /// Shows/hides the Keyboard Shortcuts settings section (RW-C-004).
+    @objc private func toggleShortcutsSection() {
+        shortcutsSection.isHidden.toggle()
+    }
+
     @objc private func submitCodeAction() {
         let code = pairingCodeField.stringValue
             .trimmingCharacters(in: .whitespaces)
@@ -317,6 +352,9 @@ final class AppController: NSObject, NSWindowDelegate,
             model.searchText = ""
             searchField.stringValue = ""
             catalogStatusLabel.stringValue = ""
+            // FR-07/8.1: connection loss → reset tracked key state so
+            // a key cannot remain logically pressed.
+            shortcutsModel.service.reset()
         }
         stateLabel.stringValue = statusText(for: state)
         hostNameLabel.stringValue = client.hostName.map {
@@ -596,6 +634,12 @@ final class AppController: NSObject, NSWindowDelegate,
 
     func windowWillClose(_ notification: Notification) {
         client.disconnect()
+    }
+
+    /// Focus loss: release tracked pressed-key state (FR-07/8.1 —
+    /// "reset outstanding key state on focus loss or connection loss").
+    func windowDidResignKey(_ notification: Notification) {
+        shortcutsModel.service.reset()
     }
 
     // MARK: View helpers

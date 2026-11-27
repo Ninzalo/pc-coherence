@@ -21,8 +21,9 @@ harness.runAll(MediaAeadSuite.cases)
 harness.runAll(MediaHandshakeSuite.cases)
 harness.runAll(MediaStreamSuite.cases)
 harness.runAll(VideoConstructionSuite.cases)
+harness.runAll(ShortcutAdaptationSuite.cases)
 
 let total = harness.checks
 print("")
-print("TOTAL: \(total) checks across 13 suites, \(harness.failures) failure(s)")
+print("TOTAL: \(total) checks across 14 suites, \(harness.failures) failure(s)")
 exit(harness.failures == 0 ? 0 : 1)
