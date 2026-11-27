@@ -83,3 +83,18 @@ if(WIN32)
     gtest_discover_tests(${t} DISCOVERY_TIMEOUT 30)
   endforeach()
 endif()
+
+# Win32 window-source integration test (RW-H-010 Stage 2, H-WINDOWS).
+# Created ONLY on Windows: win32/windows/*.cpp (and this test) must NOT
+# compile on macOS. Hermetic: the process creates its own top-level +
+# owned dialog windows and cleans them up (see the file header). The test
+# provides its own main() (no gtest_main).
+if(WIN32)
+  add_executable(win32_windows_registry_test win32_windows_registry_test.cpp)
+  target_link_libraries(win32_windows_registry_test PRIVATE
+    rwh_win32_windows
+    GTest::gtest
+    Threads::Threads
+    user32)
+  gtest_discover_tests(win32_windows_registry_test DISCOVERY_TIMEOUT 30)
+endif()

@@ -78,6 +78,15 @@ if(WIN32)
   target_link_libraries(rwh_win32_catalog PUBLIC rwh_core ole32 shell32)
 endif()
 
+# Win32 window source (RW-H-010 Stage 2, H-WINDOWS): SetWinEventHook hook
+# thread + periodic EnumWindows reconciliation scan feeding the portable
+# WindowRegistry (core/window_registry.hpp). Windows-only: there is no
+# macOS port of this target (NOT RUN on macOS by design).
+if(WIN32)
+  add_library(rwh_win32_windows STATIC win32/windows/Win32WindowSource.cpp)
+  target_link_libraries(rwh_win32_windows PUBLIC rwh_core user32)
+endif()
+
 # Windows Host application shell (H-FOUND, plan section 4.1). Console
 # subsystem (selftest output must be capturable by the build/test runner);
 # Win32 + .rc resources, MSVC only.
