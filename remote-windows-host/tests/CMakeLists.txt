@@ -11,6 +11,7 @@ set(RWH_TESTS
   catalog_test
   catalog_service_test
   window_relationships_test
+  window_registry_test
   input_test
   pairing_test
   power_policy_test

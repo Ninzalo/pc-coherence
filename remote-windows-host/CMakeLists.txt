@@ -26,6 +26,7 @@ add_library(rwh_core STATIC
   core/catalog.cpp
   core/catalog_service.cpp
   core/window_relationships.cpp
+  core/window_registry.cpp
   core/input.cpp
   core/pairing.cpp
   core/power_policy.cpp

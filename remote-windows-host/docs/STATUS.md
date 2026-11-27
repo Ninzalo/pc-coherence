@@ -1,20 +1,28 @@
 # Windows Host — STATUS
 
-Last updated: 2026-11-25 (RW-H-009 Win32 catalog DONE and verified: Windows
-runner **157/157 unit tests + selftest_ok @ `7bb5687`** after four runner
+Last updated: 2026-11-27 (RW-H-010 Stage 1: portable window-registry core
+implemented — live window registry with UUID window_ids, owner/parent
+relationship graph, cross-PID auxiliary correlation (ADR-0006), modality
+inference, snapshot reconciliation; **177/177 macOS CTest** (145 prior +
+32 new), macOS-verifiable; the Win32 WinEvents adapter + hermetic
+integration test are Stage 2 (Windows-runner-verified, pending). RW-H-009
+Win32 catalog remains the last fully-verified Windows item: runner
+**157/157 unit tests + selftest_ok @ `7bb5687`** after four runner
 feedback rounds — MSVC build fixes, a 3.5 h session-0 launch hang triaged
 and root-caused, ctest per-test timeout + 25-min watchdog added, and
 launch/scan correctness fixes (pre-resolve .lnk targets, no
 `SLGP_FILESYSTEM` in the Start Menu scan, ms-appx URI fixtures that do not
-persist on 24H2). macOS 145/145. RW-H-008: 143/143 macOS + Windows runner
-146/146 @ `d342bb3`; see "Implemented and verified" below. Client C-MEDIA
-(RW-C-003) media channel merged into main at `c5320e3` on 2026-11-25
-(client `docs/STATUS.md`); the host tree was unchanged by that merge).
+persist on 24H2). macOS 145/145 at that SHA. RW-H-008: 143/143 macOS +
+Windows runner 146/146 @ `d342bb3`; see "Implemented and verified" below.
+Client C-MEDIA (RW-C-003) media channel merged into main at `c5320e3` on
+2026-11-25 (client `docs/STATUS.md`); the host tree was unchanged by that
+merge.)
 
 ## Implemented and verified
 
 | Item | Evidence |
 |---|---|
+| Window registry core (RW-H-010 Stage 1, H-WINDOWS, plan FR-03): `core/window_registry.{hpp,cpp}` — live registry of top-level windows; durable `window_id` = UUID v4 assigned once at first sight (HWND never the remote identity, ADR-0006); full `WindowRecord` (hwnd transient, pid/tid, title, class, DPI-aware client-area geometry, visible/enabled/minimized/maximized, z-order rank, active, owner/parent/root-owner native edges + resolved remote window_ids, role, modality, app_session_id, surface kind); event state machine (create/show/hide/destroy/name-change/location-change/z-order/focus/minimize/restore/enable) with idempotent re-delivery and HWND-recycling → fresh UUID; reconciliation scan ("scan wins for current truth, events win for history" via per-field event recency) recovering missed creates/destroys, idempotent; relationship graph (owner/parent resolution incl. late-owner Reannounce, nested root-owner chains); ADR-0006 session correlation (owner/root-owner chain cross-PID, corroborated pid-set, focus-transition chain — PID alone NEVER correlates, explicit counter-example test); surface classification (WS_CHILD-style = ChildControl, never a duplicate capture stream; owned/popup top-levels = own stream); modality inference (none / window-modal / app-modal from owner + owner+sibling enabled state, portable seam) | 32 new test cases in `tests/window_registry_test.cpp` (lifecycle, HWND reuse, reconciliation, nested/cross-PID dialogs, z-order, focus, destroy cleanup, anti-pattern correlation, surface, modality, session grouping) — macOS **177/177 CTest** (previous 145 + 32 new, 0 failed; commands below). Win32 adapter = Stage 2 (NOT RUN on macOS by design — Win32 targets do not compile there) |
 | Protocol contract v0.1.0 (schema, VERSION, 22 test vectors, export tool) | `tools/export_protocol.sh` runs, produces **per-file** `SHA256SUMS` (fixed 2026-11-24: the old script hashed the printed file list, yielding one `-:` entry; now `sha256sum` over each file); export re-verified 25/25 |
 | `core/` portable protocol model: types, JSON codec, semantic validation, version parsing, FPS gate, catalog, window relationships, input/key mapping, pairing, power policy, authorization | 104/104 CTest tests pass (commands below) |
 | `network/` portable signaling: length-prefixed framing, TCP socket, signaling server/client (HELLO/pairing/heartbeat) | `signaling_e2e_test` loopback + concurrent clients + malformed-frame handling pass |
@@ -35,33 +43,34 @@ cmake -S remote-windows-host -B remote-windows-host/build
 cmake --build remote-windows-host/build -j
 ctest --test-dir remote-windows-host/build --output-on-failure
 ```
-Result: 2026-11-25, macOS 27.2.1, CMake 4.5.1,
-Ninja 1.13.2, clang (Apple). Build clean (exit 0). **145/145 tests
-PASSED** (previous 143 + the 2 RW-H-009 held-handle cases
-`LaunchService.SweepUsesRetainedHandleWhenPidIsBlind` and
-`LaunchService.RelaunchReleasesSupersededHandle`, 0 failed). The 2 new
-Win32 test suites (`win32_launcher_test`, `startmenu_source_test`)
-build ONLY on Windows — on macOS they are excluded from the CTest set
-(per AGENTS.md: Win32 targets do not compile on macOS; recorded as NOT
-RUN there, verified on the runner below). Suites:
-sha256, protocol_version, protocol_json (incl. 22 canonical test vectors),
-validation, fps_policy, catalog, window_relationships, input, pairing,
-power_policy, authorization, framing, signaling_e2e, session_auth
-(now 23 tests: the 21 from RW-H-004/005 + 2 new RW-H-008 loopback e2e —
-paired real catalog + real launch over real 127.0.0.1 TCP with wired
-`ControlServices`, and the heartbeat piggyback: `app_catalog_changed`
-once, `app_status` CLOSED once, no duplicates), plus the RW-H-007 media
-suites (media_framing 9, media_stream_keys 3, media_stream_registry 8,
-hmac_sha256 3 — see previous build notes) and the new RW-H-008
-catalog_service suite (16: snapshot dedupe/protocol-readiness with
-priority-wins entry selection, no-rescan caching, forced-rescan revision
-bump + broadcast marks, find hit/miss, union availability, empty-source
-revision floor ≥ 1, launch success session with uuid-format session id,
-unknown-app-id allow-list proof — launcher call count stays 0 —
-unavailable-entry `launch_failed`, launcher typed-failure pass-through +
-empty-code fallback, sweep reports a dead process exactly once, re-launch
-replaces the session (new id/pid/timestamp), `makeUuid` format +
-1000-sample uniqueness).
+Result: 2026-11-27 (RW-H-010 Stage 1), macOS 27.2.1, CMake 4.5.1,
+Ninja 1.13.2, clang (Apple). Build clean (exit 0). **177/177 tests
+PASSED** (previous 145 + 32 new `window_registry_test` cases, 0 failed).
+The 32 new cases: WindowRegistryLifecycle (11: full-field announce with
+UUID identity, HWND recycling → fresh window_id, name/location/z-order
+updates + idempotent re-delivery, hide/show, minimize/restore, focus
+active-flag handoff, destroy-removal with parent survival, owner-death
+clears child's resolved owner id, missed-create materialization),
+Reconciliation (6: missed-CREATE recovery from scan, missed-DESTROY
+recovery ("unavailable"), scan-wins-for-current-truth, events-win-for-history
+over a stale scan, scan idempotency, scripted multi-miss sequence),
+Relationships (6: early-owner announce carries owner id, late-owner
+Reannounce, nested root-owner chain, cross-PID brokered dialog
+correlated via owner chain, PID-alone counter-example (same PID in two
+sessions' pid sets → uncorrelated), focus-transition correlation after
+late anchor), SurfaceClassification (3: child control never a separate
+stream, owned popup is its own surface, child-inside-tracked-parent),
+Modality (4: no-owner never modal, enabled owner → window-modal,
+owner+siblings disabled → app-modal transition both ways, enabled sibling
+keeps window-modal), AppSession (2: primary-pid first top-level anchors,
+explicit association → auxiliary role). The Win32 adapter test suites
+(STAGE 2) build ONLY on Windows — on macOS they are excluded from the
+CTest set (per AGENTS.md: Win32 targets do not compile on macOS; recorded
+as NOT RUN there). Earlier suites (sha256, protocol_version, protocol_json
+incl. 22 canonical vectors, validation, fps_policy, catalog,
+window_relationships, input, pairing, power_policy, authorization, framing,
+signaling_e2e, session_auth, the RW-H-007 media suites, and the RW-H-008
+catalog_service suite) unchanged and green at their prior counts.
 
 ## Windows runner (Section 18.4) — verified
 
@@ -327,8 +336,11 @@ Windows runner (DESKTOP-PC), 2026-11-24:
    `remote-windows-client/docs/agent-tasks/RW-C-004.md` (written,
    committed `7bb5687`; input-pipeline integration is scoped out of the
    packet — it needs C-WINDOWS/H-INPUT).
-2. H-WINDOWS / H-MEDIA (Host): Win32 WGC capture + window registry/events
-   (the next host track; no packet yet — to be written when dispatched).
+2. H-WINDOWS (Host): window registry — Stage 1 (portable core) DONE on
+   branch `agent/H-WINDOWS/RW-H-010` (177/177 macOS, above); Stage 2
+   (Win32 WinEvents adapter + hermetic integration test, Windows-runner
+   verified) is the active step. H-MEDIA: Win32 WGC capture (next host
+   track after the registry lands).
 
 Done:
 
