@@ -53,6 +53,7 @@
 #include <windows.h>
 
 #include <chrono>
+#include <cstdio>
 #include <functional>
 #include <mutex>
 #include <string>
@@ -145,6 +146,15 @@ class Win32WindowsRegistryTest : public ::testing::Test {
     core::EventSequence scan_seq = 0;
     std::vector<core::RegistryNotification> notifications;
     void onWindowEvent(const core::WindowEvent& ev) override {
+      char line[160];
+      std::snprintf(line, sizeof(line),
+                    "E kind=%d hwnd=%s pid=%u geo=%d vis=%d st=%d z=%d "
+                    "act=%d rel=%d\n",
+                    (int)ev.kind, ev.info.hwnd.c_str(), ev.info.pid,
+                    (int)ev.info.has_geometry, (int)ev.info.has_visibility,
+                    (int)ev.info.has_state, (int)ev.info.has_z_order,
+                    (int)ev.info.has_active, (int)ev.info.has_relationships);
+      onEventRecorded(line);
       auto n = reg->applyEvent(ev);
       if (n.empty()) return;
       std::lock_guard lk(mu);
@@ -152,6 +162,7 @@ class Win32WindowsRegistryTest : public ::testing::Test {
     }
     void onScanStarted() override { scan_seq = reg->eventSequence(); }
     void onScan(const std::vector<core::NativeWindowInfo>& scan) override {
+      onEventRecorded("SCAN n=" + std::to_string(scan.size()));
       auto n = reg->reconcile(scan, scan_seq);
       std::lock_guard lk(mu);
       notifications.insert(notifications.end(), n.begin(), n.end());
@@ -174,6 +185,23 @@ class Win32WindowsRegistryTest : public ::testing::Test {
           ++c;
       return c;
     }
+    // Bounded structured timeline of what the adapter delivered (raw
+    // events + scan markers) — diagnostics only, no window contents.
+    void onEventRecorded(const std::string& line) {
+      std::lock_guard lk(mu);
+      if (raw_events.size() < 20000) raw_events.push_back(line);
+    }
+    std::vector<core::RegistryNotification> snapshot() {
+      std::lock_guard lk(mu);
+      return notifications;
+    }
+    std::vector<std::string> rawEvents() {
+      std::lock_guard lk(mu);
+      return raw_events;
+    }
+
+   private:
+    std::vector<std::string> raw_events;
   };
 
   core::WindowRegistry registry_;
@@ -209,7 +237,67 @@ class Win32WindowsRegistryTest : public ::testing::Test {
     visible_ctx_ = TopLevelWindowsCanBeShown();
   }
 
+  // Diagnostics: on a failing test, dump the structured adapter
+  // timeline + notification sequence + final registry state to
+  // C:\rwh\winreg_fail_<TestName>.log. Structured fields only — never
+  // window contents (AGENTS.md hard rule 3 applies to logs too).
+  void DumpFailDiagnostics() {
+    const ::testing::TestInfo* info =
+        ::testing::UnitTest::GetInstance()->current_test_info();
+    const char* name = info ? info->name() : "unknown";
+    const std::string path =
+        std::string("C:\\rwh\\winreg_fail_") + name + ".log";
+    FILE* f = std::fopen(path.c_str(), "w");
+    if (!f) return;
+    std::fprintf(f, "# legend E kind: 0=Create 1=Show 2=Hide 3=Destroy "
+                    "4=NameChange 5=LocationChange 6=FocusGained 7=FocusLost "
+                    "8=Minimize 9=Restore 10=EnableChange\n");
+    std::fprintf(f, "# legend n kind: 0=Announce 1=Update 2=Reannounce "
+                    "3=Remove\n");
+    std::fprintf(f, "# legend role: 0=Unspecified 1=Main 2=Document 3=Dialog "
+                    "4=FilePicker 5=Popup 6=Tool 7=Auxiliary 8=Unknown\n");
+    std::fprintf(f, "# legend mod: 0=None 1=WindowModal 2=AppModal; "
+                    "surf: 0=IndependentTopLevel 1=ChildControl\n");
+    for (const auto& line : sink_.rawEvents())
+      std::fputs(line.c_str(), f);
+    std::fputs("---- notifications ----\n", f);
+    const auto notifs = sink_.snapshot();
+    for (size_t i = 0; i < notifs.size(); ++i) {
+      const auto& n = notifs[i];
+      if (n.kind == core::RegistryNotificationKind::Remove) {
+        std::fprintf(f, "%zu R id=%.8s reason=%s\n", i, n.window_id.c_str(),
+                     n.remove_reason.c_str());
+        continue;
+      }
+      const auto& r = n.record;
+      std::fprintf(
+          f,
+          "%zu K=%d id=%.8s hwnd=%s pid=%u vis=%d en=%d min=%d rank=%d "
+          "role=%d mod=%d surf=%d sess=%s owner=%s root=%s\n",
+          i, (int)n.kind, n.window_id.c_str(), r.hwnd.c_str(), r.pid,
+          (int)r.visible, (int)r.enabled, (int)r.minimized, r.z_order_rank,
+          (int)r.role, (int)r.modality, (int)r.surface_kind,
+          r.app_session_id.c_str(), r.owner_hwnd.value_or("-").c_str(),
+          r.root_owner_hwnd.value_or("-").c_str());
+    }
+    std::fputs("---- final state ----\n", f);
+    for (const auto& r : registry_.all()) {
+      std::fprintf(
+          f,
+          "FINAL hwnd=%s pid=%u vis=%d en=%d rank=%d role=%d mod=%d "
+          "sess=%s owner=%s root=%s active=%d\n",
+          r.hwnd.c_str(), r.pid, (int)r.visible, (int)r.enabled,
+          r.z_order_rank, (int)r.role, (int)r.modality,
+          r.app_session_id.c_str(), r.owner_hwnd.value_or("-").c_str(),
+          r.root_owner_hwnd.value_or("-").c_str(), (int)r.is_active);
+    }
+    std::fclose(f);
+  }
+
   void TearDown() override {
+    if (::testing::Test::HasFatalFailure() ||
+        ::testing::Test::HasNonfatalFailure())
+      DumpFailDiagnostics();
     for (HWND h : created_) {
       if (h && IsWindow(h)) DestroyWindow(h);
     }
