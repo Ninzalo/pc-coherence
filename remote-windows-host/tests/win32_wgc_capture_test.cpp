@@ -124,18 +124,43 @@ HWND CreateTestWindow() {
 
 // ------------------------------------------------------- test fakes
 
+// Test double for the IVideoEncoder seam. MUST honor the contract
+// (core/capture_encoder.hpp: "Encode one source frame; 0..N encoded
+// frames are pushed to the sink given at construction") — the pipeline
+// counts delivered frames at the sink (noteEncoded), so a fake that
+// only counts internally makes the delivery metric structurally zero
+// no matter how many live frames the adapter delivers (the RW-H-011b
+// stage table showed exactly that: emitted=58, delivered=0).
 class FakeEncoder final : public core::IVideoEncoder {
  public:
-  bool start(uint32_t, uint32_t, uint32_t) override { return true; }
+  FakeEncoder(std::string id, core::IEncodedFrameConsumer& sink)
+      : id_(std::move(id)), sink_(sink) {}
+  bool start(uint32_t, uint32_t, uint32_t) override {
+    std::lock_guard<std::mutex> lk(mu);
+    pending_keyframe_ = false;
+    return true;
+  }
   void stop() override {}
   bool encodeFrame(const core::CapturedFrame& frame) override {
-    std::lock_guard<std::mutex> lk(mu);
-    encoded++;
+    core::EncodedFrame ef;
+    {
+      std::lock_guard<std::mutex> lk(mu);
+      ef.window_id = id_;
+      ef.source_seq = frame.seq;
+      ef.frame_seq = frame_seq_++;
+      ef.keyframe = pending_keyframe_;
+      pending_keyframe_ = false;
+      ef.payload = {0xAB, 0xCD};  // stub access unit: size/shape only
+      encoded++;
+    }
+    sink_.onEncodedFrame(ef);  // outside the lock (the sink takes the
+                               // manager lock; no cycle back here)
     return true;
   }
   void requestKeyframe() override {
     std::lock_guard<std::mutex> lk(mu);
     keyframes++;
+    pending_keyframe_ = true;
   }
   size_t encodedCount() const {
     std::lock_guard<std::mutex> lk(mu);
@@ -147,16 +172,20 @@ class FakeEncoder final : public core::IVideoEncoder {
   }
 
  private:
+  std::string id_;
+  core::IEncodedFrameConsumer& sink_;
   mutable std::mutex mu;
   size_t encoded = 0;
   size_t keyframes = 0;
+  uint32_t frame_seq_ = 0;
+  bool pending_keyframe_ = false;
 };
 
 class FakeEncoderFactory final : public core::IVideoEncoderFactory {
  public:
   std::unique_ptr<core::IVideoEncoder> create(
-      const std::string&, core::IEncodedFrameConsumer&) override {
-    auto enc = std::make_unique<FakeEncoder>();
+      const std::string& window_id, core::IEncodedFrameConsumer& sink) override {
+    auto enc = std::make_unique<FakeEncoder>(window_id, sink);
     current = enc.get();
     return enc;
   }
@@ -345,7 +374,10 @@ TEST(WgcCapture, HermeticConsentGatedPipeline) {
 
   // Frame routing + dimensions: the exact physical client size at the
   // window's DPI, and every delivered frame carries the test window_id.
+  // frames_received is counted at the gate (adapter level) — it proves
+  // live frames flowed from WGC, independent of the encoder fake.
   const auto m = mgr.metrics(kTestId);
+  EXPECT_GE(m.frames_received, 5u);
   EXPECT_GE(m.frames_delivered, 5u);
   EXPECT_EQ(m.width_px, phys_w);
   EXPECT_EQ(m.height_px, phys_h);
