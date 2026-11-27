@@ -89,6 +89,18 @@ if(WIN32)
   target_link_libraries(rwh_win32_windows PUBLIC rwh_core user32)
 endif()
 
+# Win32 WGC capture adapter (RW-H-011 Stage 2, H-MEDIA): the
+# Windows.Graphics.Capture implementation of the portable
+# core::ICaptureSurfaceSource seam (per-window GraphicsCaptureItem +
+# free-threaded D3D11 frame pool + per-surface worker thread, consent
+# gate via GraphicsCaptureAccess::RequestAccessAsync). Windows-only:
+# there is no macOS port of this target (NOT RUN on macOS by design).
+if(WIN32)
+  add_library(rwh_win32_capture STATIC win32/capture/WgcCaptureSource.cpp)
+  target_link_libraries(rwh_win32_capture
+                        PUBLIC rwh_core d3d11 dwmapi windowsapp)
+endif()
+
 # Windows Host application shell (H-FOUND, plan section 4.1). Console
 # subsystem (selftest output must be capturable by the build/test runner);
 # Win32 + .rc resources, MSVC only.

@@ -1,0 +1,558 @@
+// RW-H-011 Stage 2 (H-MEDIA, plan FR-03): Windows.Graphics.Capture
+// implementation of core::ICaptureSurfaceSource. WIN32 ONLY — see the
+// header for the doc-check notes (2026-11-27) and the documented pixel
+// path (bounded per-window D3D11 staging copy → tight CPU BGRA8).
+//
+// SDK 10.0.26100.0 / cppwinrt v2.0.250303.5 API notes (verified
+// against the installed headers, 2026-11-27):
+//   * Item creation: GraphicsCaptureItem::TryCreateFromWindowId
+//     (IGraphicsCaptureItemStatics2, Win10 2004+) with the WindowId
+//     from DwmGetWindowAttribute(DWMWA_WINDOW_ID). The
+//     IGraphicsCaptureItemInterop::CreateForWindow path is NOT used:
+//     SDK 26100's windows.graphics.capture.interop.h declares only the
+//     interface IID (3628E81B-3CAC-4C60-B7F4-23CE0E0C3356) — no
+//     CLSID_GraphicsCaptureItemInterop — so the interop factory CLSID
+//     is unverifiable offline; TryCreateFromWindowId is the documented
+//     WinRT path and is present in this SDK.
+//   * Frame surface: Direct3D11CaptureFrame::Surface() (this SDK's
+//     projection name; ABI get_Surface) →
+//     Windows::Graphics::DirectX::Direct3D11::IDirect3DSurface, whose
+//     ABI is ID3D11Texture2D (winrt::get_abi).
+//   * Frame pool: Direct3D11CaptureFramePool::CreateFreeThreaded takes
+//     Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice (obtained
+//     by QI on the D3D11 device). There is NO IsCreationDenied member
+//     in this SDK and NO session/item Closed events in the projection —
+//     a vanished/occluded source is detected via consecutive
+//     TryGetNextFrame()==nullptr (registry destroy news is the primary
+//     teardown driver; this is the safety net).
+//   * Events: winrt::event_token + token overloads (attach =
+//     FrameArrived(handler), detach = FrameArrived(token)); there is no
+//     winrt::event_registration in this SDK's cppwinrt.
+//   * Errors: winrt::hresult_error::code() (this cppwinrt has no
+//     hresult_error::to_hresult member).
+//   * Consent: GraphicsCaptureAccess::RequestAccessAsync(Programmatic)
+//     → IAsyncOperation<AppCapabilityAccessStatus>; polled via
+//     IAsyncInfo::Status() with a bounded 2 s deadline (the OS prompt
+//     is a USER ACTION — never a hang), then GetResults().
+
+#include "win32/capture/WgcCaptureSource.hpp"
+
+#include <chrono>
+#include <cinttypes>
+#include <condition_variable>
+#include <cstdlib>
+#include <cstring>
+#include <mutex>
+#include <utility>
+#include <vector>
+
+// Win32 environment (pins Win10, undefs colliding SDK macros) BEFORE
+// the SDK / WinRT headers.
+#include "app/Win32Env.hpp"
+
+#include <d3d11.h>
+#include <dwmapi.h>
+
+#include <winrt/base.h>
+#include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Graphics.Capture.h>
+#include <winrt/Windows.Graphics.DirectX.h>
+#include <winrt/Windows.Graphics.DirectX.Direct3D11.h>
+#include <winrt/Windows.Security.Authorization.AppCapabilityAccess.h>
+
+namespace {
+
+using winrt::Windows::Foundation::AsyncStatus;
+using winrt::Windows::Foundation::IInspectable;
+using winrt::Windows::Graphics::Capture::Direct3D11CaptureFrame;
+using winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool;
+using winrt::Windows::Graphics::Capture::GraphicsCaptureAccess;
+using winrt::Windows::Graphics::Capture::GraphicsCaptureAccessKind;
+using winrt::Windows::Graphics::Capture::GraphicsCaptureItem;
+using winrt::Windows::Graphics::Capture::GraphicsCaptureSession;
+using winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice;
+using winrt::Windows::Graphics::DirectX::DirectXPixelFormat;
+using winrt::Windows::Graphics::SizeInt32;
+using winrt::Windows::Security::Authorization::AppCapabilityAccess::AppCapabilityAccessStatus;
+using winrt::Windows::UI::WindowId;
+
+// Consecutive null TryGetNextFrame results before the surface reports
+// SourceClosed (creation denied or item gone; no IsCreationDenied /
+// Closed events exist in this SDK's projection).
+constexpr uint32_t kNullFrameThreshold = 30;
+constexpr uint32_t kConsentPollMs = 50;
+constexpr std::chrono::seconds kConsentDeadline{2};
+
+uint64_t monotonicUs() {
+  return static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::microseconds>(
+          std::chrono::steady_clock::now().time_since_epoch())
+          .count());
+}
+
+// DWMWA_WINDOW_ID: the documented DWMWINDOWATTRIBUTE value 14 (since
+// Win10 1607). SDK 10.0.26100.0 no longer exposes the named constant
+// (dwmcore.h is gone and dwmapi.h's reworked DWMWINDOWATTRIBUTE enum
+// does not list it — verified on the runner 2026-11-27), but the OS
+// DwmGetWindowAttribute value is stable; use the documented number.
+#ifndef DWMWA_WINDOW_ID
+#define DWMWA_WINDOW_ID 14
+#endif
+
+// The Win32 HWND token is "0x%llX" (win32/windows/Win32WindowSource.cpp
+// HwndKeyImpl); parse it back. Unparseable tokens → nullptr.
+HWND ParseHwndToken(const std::string& token) {
+  if (token.size() < 4 || token.rfind("0x", 0) != 0) return nullptr;
+  errno = 0;
+  unsigned long long v = std::strtoull(token.c_str() + 2, nullptr, 16);
+  if (errno != 0 || v == 0) return nullptr;
+  return reinterpret_cast<HWND>(static_cast<std::uintptr_t>(v));
+}
+
+}  // namespace
+
+namespace remotewindows::win32 {
+
+// ------------------------------------------------------------ Surface
+
+struct WgcCaptureSource::Surface {
+  std::string window_id;
+  HWND hwnd = nullptr;
+  uint32_t max_w = 0;  // pool max dimension (request geometry)
+  uint32_t max_h = 0;
+  core::IFrameConsumer* consumer = nullptr;
+
+  // WGC objects. DECLARATION ORDER IS THE DESTRUCTION CONTRACT
+  // (members destroy in reverse order): the frame event token is
+  // revoked explicitly by the worker BEFORE session/pool are closed,
+  // the session must die before its pool, and device/ctx/staging must
+  // outlive any in-flight frame copy.
+  winrt::event_token frame_token{};
+  GraphicsCaptureSession session = nullptr;
+  Direct3D11CaptureFramePool pool = nullptr;
+  GraphicsCaptureItem item = nullptr;
+  winrt::com_ptr<ID3D11Texture2D> staging;
+  winrt::com_ptr<ID3D11DeviceContext> ctx;
+  winrt::com_ptr<ID3D11Device> device;
+  uint32_t staging_w = 0;
+  uint32_t staging_h = 0;
+
+  std::atomic<uint64_t> seq{0};
+  std::atomic<uint32_t> null_frames{0};
+  std::atomic<bool> stopping{false};
+  std::atomic<bool> reported{false};
+  std::atomic<bool> start_done{false};
+  core::CaptureError start_err{core::CaptureError::InternalError};
+
+  std::mutex start_mu;
+  std::condition_variable start_cv;
+  std::mutex stop_mu;
+  std::condition_variable stop_cv;
+  std::mutex frame_mu;  // serializes in-flight frame work vs teardown
+
+  std::thread worker;
+
+  void requestStop() {
+    stopping.store(true);
+    stop_cv.notify_all();
+  }
+};
+
+struct WgcCaptureSource::Impl {
+  std::mutex mu;
+  std::map<std::string, std::unique_ptr<Surface>> surfaces;
+  std::atomic<bool> consent_granted{false};  // process-level cache
+};
+
+WgcCaptureSource::WgcCaptureSource() : impl_(std::make_unique<Impl>()) {}
+
+WgcCaptureSource::~WgcCaptureSource() {
+  // Stop every live surface (joins workers, releases WGC objects).
+  std::vector<std::unique_ptr<Surface>> victims;
+  {
+    std::lock_guard<std::mutex> mu(impl_->mu);
+    for (auto& [id, s] : impl_->surfaces) {
+      victims.push_back(std::move(s));
+      s->requestStop();
+    }
+    impl_->surfaces.clear();
+  }
+  for (auto& v : victims) v->worker.join();
+}
+
+// ---------------------------------------------------------- consent
+
+core::CaptureError WgcCaptureSource::consentGate() {
+  if (impl_->consent_granted.load()) return core::CaptureError::None;
+  // WinRT must be initialized on the calling thread (MTA; idempotent).
+  winrt::init_apartment(winrt::apartment_type::multi_threaded);
+  try {
+    auto op =
+        GraphicsCaptureAccess::RequestAccessAsync(GraphicsCaptureAccessKind::
+                                                      Programmatic);
+    // Bounded wait: the OS may present a one-time consent prompt — a
+    // USER ACTION (a human at the PC). Never block on it; an
+    // unanswered prompt is "not granted yet". Poll IAsyncInfo::Status
+    // (no Completed handler needed in this cppwinrt's projection).
+    const auto deadline =
+        std::chrono::steady_clock::now() + kConsentDeadline;
+    bool completed = false;
+    for (;;) {
+      completed = op.Status() == AsyncStatus::Completed;
+      if (completed || std::chrono::steady_clock::now() >= deadline)
+        break;
+      std::this_thread::sleep_for(
+          std::chrono::milliseconds(kConsentPollMs));
+    }
+    // SDK 26100's reworked enum (verified on the runner): values are
+    // DeniedBySystem=0, NotDeclaredByApp=1, DeniedByUser=2,
+    // UserPromptRequired=3, Allowed=4 — only Allowed means "granted".
+    if (completed && op.GetResults() == AppCapabilityAccessStatus::Allowed) {
+      impl_->consent_granted.store(true);  // stable for the process
+      return core::CaptureError::None;
+    }
+    return core::CaptureError::ConsentRequired;
+  } catch (...) {
+    // API unavailable (pre-2104 build) or the async request itself
+    // failed: the consent state is indeterminate — do NOT start a
+    // capture that could block on a consent dialog.
+    return core::CaptureError::ConsentRequired;
+  }
+}
+
+// ------------------------------------------------- worker-thread body
+
+core::CaptureError WgcCaptureSource::startOnThread(Surface& s) {
+  using core::CaptureError;
+  try {
+    // 1. Item for the HWND via the DWM window id (Win10 2004+).
+    UINT64 window_id = 0;
+    if (FAILED(DwmGetWindowAttribute(
+            s.hwnd, DWMWA_WINDOW_ID, &window_id, sizeof(window_id)))) {
+      return IsWindow(s.hwnd) ? CaptureError::SourceUnavailable
+                              : CaptureError::SourceClosed;
+    }
+    GraphicsCaptureItem item = nullptr;
+    try {
+      item = GraphicsCaptureItem::TryCreateFromWindowId(
+          WindowId{window_id});
+    } catch (...) {
+      item = nullptr;
+    }
+    if (!item) {
+      // The window vanished between the IsWindow check and now, or the
+      // surface cannot be captured at all.
+      return IsWindow(s.hwnd) ? CaptureError::SourceUnavailable
+                              : CaptureError::SourceClosed;
+    }
+    s.item = item;
+
+    // 2. D3D11 device (hardware, WARP fallback) + the WGC device view.
+    HRESULT hr = D3D11CreateDevice(
+        nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, nullptr, 0,
+        D3D11_SDK_VERSION, s.device.put(), nullptr, s.ctx.put());
+    if (FAILED(hr) || !s.device || !s.ctx) {
+      hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0,
+                             nullptr, 0, D3D11_SDK_VERSION, s.device.put(),
+                             nullptr, s.ctx.put());
+    }
+    if (FAILED(hr) || !s.device || !s.ctx) return CaptureError::InternalError;
+
+    void* wgc_device = nullptr;
+    hr = s.device->QueryInterface(winrt::guid_of<IDirect3DDevice>(),
+                                  &wgc_device);
+    if (FAILED(hr) || !wgc_device) return CaptureError::InternalError;
+    winrt::com_ptr<IDirect3DDevice> device_view(
+        wgc_device, winrt::take_ownership_from_abi);
+
+    // 3. Free-threaded frame pool (Win10 1809+): FrameArrived fires on
+    //    the pool's internal worker thread — no message pump needed.
+    SizeInt32 maxDim{static_cast<int32_t>(s.max_w),
+                     static_cast<int32_t>(s.max_h)};
+    s.pool = Direct3D11CaptureFramePool::CreateFreeThreaded(
+        *device_view, DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, maxDim);
+    if (!s.pool) return CaptureError::InternalError;
+
+    // 4. Session (no capture border).
+    s.session = s.pool.CreateCaptureSession(s.item);
+    s.session.IsBorderRequired(false);
+
+    // 5. Frame event. The handler runs on a WGC-internal thread; it
+    //    NEVER takes the adapter map lock (it may call back into the
+    //    manager, which takes the manager lock — the adapter map lock
+    //    is only ever taken by start/stop/worker threads).
+    s.frame_token = s.pool.FrameArrived([this, &s](
+                                            const Direct3D11CaptureFramePool& pool,
+                                            IInspectable const&) {
+      if (s.stopping.load()) return;
+      Direct3D11CaptureFrame frame = nullptr;
+      try {
+        frame = pool.TryGetNextFrame();
+      } catch (...) {
+        frame = nullptr;
+      }
+      if (!frame) {
+        // Consecutive null frames: creation denied (e.g. consent
+        // revoked) or the item is gone. No IsCreationDenied/Closed
+        // events exist in this SDK's projection — the threshold is the
+        // detection (the registry's destroy news is the primary
+        // teardown driver; this is the safety net).
+        if (s.null_frames.fetch_add(1) + 1 >= kNullFrameThreshold)
+          reportOnce(s, CaptureError::SourceClosed);
+        return;
+      }
+      s.null_frames.store(0);
+      try {
+        std::lock_guard<std::mutex> lk(s.frame_mu);
+        if (s.stopping.load() || !s.consumer) return;
+        auto const dsurface = frame.Surface();
+        // This SDK's IDirect3DSurface projection exposes only
+        // Description() (Direct3DSurfaceDescription: Width/Height/
+        // Format/MultisampleDescription).
+        auto const desc = dsurface.Description();
+        const int32_t w = desc.Width;
+        const int32_t h = desc.Height;
+        if (w <= 0 || h <= 0) return;
+        if (static_cast<uint32_t>(w) > s.max_w ||
+            static_cast<uint32_t>(h) > s.max_h) {
+          // The window outgrew the pool max dimension: skip the frame
+          // (the registry's geometry update makes the manager
+          // recreate the session with the new size).
+          return;
+        }
+        // The frame surface's ABI is the ID3D11Texture2D directly
+        // (this cppwinrt's get_abi yields the raw ABI pointer).
+        ID3D11Texture2D* texture =
+            static_cast<ID3D11Texture2D*>(winrt::get_abi(dsurface));
+        if (!texture) return;
+        // (Re)create the staging texture for the current frame size.
+        if (!s.staging || s.staging_w != static_cast<uint32_t>(w) ||
+            s.staging_h != static_cast<uint32_t>(h)) {
+          D3D11_TEXTURE2D_DESC desc{};
+          desc.Width = static_cast<UINT>(w);
+          desc.Height = static_cast<UINT>(h);
+          desc.MipLevels = 1;
+          desc.ArraySize = 1;
+          desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+          desc.SampleDesc.Count = 1;
+          desc.Usage = D3D11_USAGE_STAGING;
+          desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+          if (FAILED(s.device->CreateTexture2D(&desc, nullptr,
+                                               s.staging.put()))) {
+            s.staging = nullptr;
+            return;
+          }
+          s.staging_w = static_cast<uint32_t>(w);
+          s.staging_h = static_cast<uint32_t>(h);
+        }
+        // Bounded copy: this window's frame only (no full-screen
+        // readback), row pitch handled.
+        s.ctx->CopyResource(s.staging.get(), texture);
+        D3D11_MAPPED_SUBRESOURCE mapped{};
+        if (FAILED(s.ctx->Map(s.staging.get(), 0, D3D11_MAP_READ, 0,
+                              &mapped))) {
+          return;
+        }
+        std::vector<uint8_t> pixels(static_cast<size_t>(w) * h * 4u);
+        const uint8_t* src = static_cast<const uint8_t*>(mapped.pData);
+        for (int32_t y = 0; y < h; ++y) {
+          std::memcpy(pixels.data() + static_cast<size_t>(y) * w * 4u,
+                      src + static_cast<size_t>(y) * mapped.RowPitch,
+                      static_cast<size_t>(w) * 4u);
+        }
+        s.ctx->Unmap(s.staging.get(), 0);
+
+        core::CapturedFrame cf;
+        cf.window_id = s.window_id;
+        cf.seq = s.seq.fetch_add(1);
+        cf.timestamp_us = monotonicUs();
+        cf.width = static_cast<uint32_t>(w);
+        cf.height = static_cast<uint32_t>(h);
+        cf.format = core::CaptureFrameFormat::Bgra8;
+        cf.pixels = std::move(pixels);
+        s.consumer->onCapturedFrame(cf);
+      } catch (...) {
+        // Any WinRT/D3D failure mid-frame: stop the surface and report
+        // once (the manager decides recreation vs permanent end).
+        s.stopping.store(true);
+        s.stop_cv.notify_all();
+        reportOnce(s, CaptureError::SourceClosed);
+      }
+    });
+
+    // 6. Start. E_ACCESSDENIED here = consent not actually granted
+    //    (revoked mid-flight or the gate raced) → ConsentRequired.
+    s.session.StartCapture();
+    return CaptureError::None;
+  } catch (winrt::hresult_error const& e) {
+    if (e.code() == winrt::hresult(E_ACCESSDENIED))
+      return core::CaptureError::ConsentRequired;
+    return core::CaptureError::SourceUnavailable;
+  } catch (...) {
+    return core::CaptureError::InternalError;
+  }
+}
+
+void WgcCaptureSource::reportOnce(Surface& s, core::CaptureError error) {
+  if (s.reported.exchange(true)) return;
+  if (s.stopping.load() && s.start_done.load()) {
+    // Clean user-initiated stop won the race: the manager already
+    // unshared the session; reporting would only count an error.
+    return;
+  }
+  if (s.consumer) s.consumer->onSourceError(s.window_id, error);
+}
+
+void WgcCaptureSource::surfaceWorker(Surface& s) {
+  winrt::init_apartment(winrt::apartment_type::multi_threaded);
+  const core::CaptureError err = startOnThread(s);
+  {
+    std::lock_guard<std::mutex> lk(s.start_mu);
+    s.start_err = err;
+    s.start_done = true;
+  }
+  s.start_cv.notify_all();
+
+  if (err == core::CaptureError::None && !s.stopping.load()) {
+    std::unique_lock<std::mutex> lk(s.stop_mu);
+    s.stop_cv.wait(lk, [&s] { return s.stopping.load(); });
+  }
+
+  // Teardown — see the Surface declaration-order contract. Wait for an
+  // in-flight frame copy (frame_mu), then revoke the frame event, then
+  // close session + pool in order, then release the COM objects.
+  {
+    std::lock_guard<std::mutex> lk(s.frame_mu);
+  }
+  if (s.frame_token) {
+    try {
+      s.pool.FrameArrived(s.frame_token);  // token overload = detach
+    } catch (...) {
+    }
+    s.frame_token = {};
+  }
+  if (s.session) {
+    try {
+      s.session.Close();
+    } catch (...) {
+    }
+    s.session = nullptr;
+  }
+  if (s.pool) {
+    try {
+      s.pool.Close();
+    } catch (...) {
+    }
+    s.pool = nullptr;
+  }
+  s.item = nullptr;
+  s.staging = nullptr;
+  s.ctx = nullptr;
+  s.device = nullptr;
+  s.consumer = nullptr;
+  ::CoUninitialize();
+  // Self-erase: only if this surface is still the live entry (an
+  // explicit stop/start may have already moved it out).
+  {
+    std::lock_guard<std::mutex> mu(impl_->mu);
+    auto it = impl_->surfaces.find(s.window_id);
+    if (it != impl_->surfaces.end() && it->second.get() == &s) {
+      impl_->surfaces.erase(it);
+    }
+  }
+}
+
+// ------------------------------------------------------ public API
+
+core::CaptureError WgcCaptureSource::startSurface(
+    const core::CaptureSurfaceRequest& req, core::IFrameConsumer& consumer) {
+  using core::CaptureError;
+  const CaptureError consent = consentGate();
+  if (consent != CaptureError::None) return consent;
+  const HWND hwnd = ParseHwndToken(req.hwnd);
+  if (!hwnd) return CaptureError::SourceUnavailable;
+  if (!IsWindow(hwnd)) return CaptureError::SourceClosed;
+
+  auto surface = std::make_unique<Surface>();
+  surface->window_id = req.window_id;
+  surface->hwnd = hwnd;
+  surface->max_w = req.width_px;
+  surface->max_h = req.height_px;
+  surface->consumer = &consumer;
+  Surface* raw = surface.get();
+
+  std::unique_ptr<Surface> retired;
+  {
+    std::lock_guard<std::mutex> mu(impl_->mu);
+    auto it = impl_->surfaces.find(req.window_id);
+    if (it != impl_->surfaces.end()) {
+      retired = std::move(it->second);
+      impl_->surfaces.erase(it);
+      retired->requestStop();
+    }
+    impl_->surfaces.emplace(req.window_id, std::move(surface));
+  }
+  raw->worker = std::thread([this, raw] { surfaceWorker(*raw); });
+  if (retired) retired->worker.join();  // fully gone before the new one
+
+  // Bounded wait for the start result (item/device/pool/session +
+  // StartCapture; normally well under a second).
+  std::unique_lock<std::mutex> lk(raw->start_mu);
+  const bool done = raw->start_cv.wait_for(
+      lk, std::chrono::seconds(10),
+      [&raw] { return raw->start_done.load(); });
+  if (!done) {
+    raw->requestStop();
+    lk.unlock();
+    raw->worker.join();
+    std::lock_guard<std::mutex> mu(impl_->mu);
+    auto it = impl_->surfaces.find(raw->window_id);
+    if (it != impl_->surfaces.end() && it->second.get() == raw) {
+      impl_->surfaces.erase(it);
+    }
+    return CaptureError::InternalError;
+  }
+  const CaptureError err = raw->start_err;
+  lk.unlock();
+  if (err != CaptureError::None) {
+    raw->requestStop();
+    raw->worker.join();
+    std::lock_guard<std::mutex> mu(impl_->mu);
+    auto it = impl_->surfaces.find(raw->window_id);
+    if (it != impl_->surfaces.end() && it->second.get() == raw) {
+      impl_->surfaces.erase(it);
+    }
+    return err;
+  }
+  return CaptureError::None;
+}
+
+core::CaptureError WgcCaptureSource::stopSurface(
+    const std::string& window_id) {
+  std::unique_ptr<Surface> victim;
+  {
+    std::lock_guard<std::mutex> mu(impl_->mu);
+    auto it = impl_->surfaces.find(window_id);
+    if (it == impl_->surfaces.end()) return core::CaptureError::None;
+    victim = std::move(it->second);
+    impl_->surfaces.erase(it);
+  }
+  victim->requestStop();
+  victim->worker.join();
+  return core::CaptureError::None;
+}
+
+bool WgcCaptureSource::isRunning(const std::string& window_id) const {
+  std::lock_guard<std::mutex> mu(impl_->mu);
+  auto it = impl_->surfaces.find(window_id);
+  return it != impl_->surfaces.end() && it->second->start_done.load() &&
+         !it->second->stopping.load() &&
+         it->second->start_err == core::CaptureError::None;
+}
+
+size_t WgcCaptureSource::surfaceCount() const {
+  std::lock_guard<std::mutex> mu(impl_->mu);
+  return impl_->surfaces.size();
+}
+
+}  // namespace remotewindows::win32

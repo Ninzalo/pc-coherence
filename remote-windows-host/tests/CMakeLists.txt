@@ -99,3 +99,22 @@ if(WIN32)
     user32)
   gtest_discover_tests(win32_windows_registry_test DISCOVERY_TIMEOUT 30)
 endif()
+
+# Win32 WGC capture integration test (RW-H-011 Stage 2, H-MEDIA).
+# Created ONLY on Windows: win32/capture/*.cpp (and this test) must NOT
+# compile on macOS. Hermetic + consent-gated: the process creates its
+# OWN top-level window and drives the real WGC adapter through the
+# portable manager; if consent is not granted (a USER ACTION), the typed
+# ConsentRequired path is asserted and the live-capture assertions
+# GTEST_SKIP; all waits are bounded (the test can never hang on UI).
+if(WIN32)
+  add_executable(win32_wgc_capture_test win32_wgc_capture_test.cpp)
+  target_link_libraries(win32_wgc_capture_test PRIVATE
+    rwh_win32_capture
+    rwh_win32_windows
+    GTest::gtest
+    Threads::Threads
+    gdi32
+    user32)
+  gtest_discover_tests(win32_wgc_capture_test DISCOVERY_TIMEOUT 30)
+endif()

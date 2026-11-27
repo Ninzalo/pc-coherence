@@ -698,6 +698,19 @@ void CaptureSessionManager::onSourceError(const std::string& window_id,
         restart_rec.app_session_id = s.app_session_id;
         restart_rec.surface_kind = WindowSurfaceKind::IndependentTopLevel;
       }
+    } else if (error == CaptureError::SourceUnavailable &&
+               (s.state == CaptureSessionState::Running ||
+                s.state == CaptureSessionState::Paused)) {
+      // Permanent surface failure (OS consent revoked, capture
+      // creation denied): the session is Ended WITHOUT a recreation
+      // retry — retrying would spin against the refusal; re-sharing
+      // requires a user action (consent) or a new explicit share.
+      s.surface_started = false;
+      s.state = CaptureSessionState::Ended;
+      s.metrics.state = CaptureSessionState::Ended;
+      s.stop_worker.store(true);
+      s.gate.discard();
+      s.worker_cv.notify_all();
     }
   }
   if (restart) startSession(restart_rec, auto_shared, nowUs());
