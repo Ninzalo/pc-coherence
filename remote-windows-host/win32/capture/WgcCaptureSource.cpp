@@ -16,15 +16,28 @@
 //     WinRT path and is present in this SDK.
 //   * Frame surface: Direct3D11CaptureFrame::Surface() (this SDK's
 //     projection name; ABI get_Surface) →
-//     Windows::Graphics::DirectX::Direct3D11::IDirect3DSurface, whose
-//     ABI is ID3D11Texture2D (winrt::get_abi).
+//     Windows::Graphics::DirectX::Direct3D11::IDirect3DSurface — in
+//     SDK 26100 a projected IInspectable-based interface exposing
+//     Description() (Direct3DSurfaceDescription). The 26100 rework
+//     REMOVED the raw COM IDirect3DSurface (GetBuffer) from the um
+//     interop header; the actual D3D11 texture comes from
+//     IDirect3DDxgiInterfaceAccess::GetInterface (uuid
+//     A9B3D012-3DF2-4EE3-B8D1-8695F457D3C1, um/
+//     windows.graphics.directx.direct3d11.interop.h) — the documented
+//     WGC pixel path.
 //   * Frame pool: Direct3D11CaptureFramePool::CreateFreeThreaded takes
-//     Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice (obtained
-//     by QI on the D3D11 device). There is NO IsCreationDenied member
-//     in this SDK and NO session/item Closed events in the projection —
-//     a vanished/occluded source is detected via consecutive
-//     TryGetNextFrame()==nullptr (registry destroy news is the primary
-//     teardown driver; this is the safety net).
+//     Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice — in
+//     SDK 26100 a projected IInspectable-based interface (NOVTABLE
+//     abi, Trim() method), NOT a COM-interop type: com_ptr<> does not
+//     apply (C2440 at operator*); the projected type is constructed
+//     directly from the ABI pointer returned by QI (A37624AB-8D5F-
+//     4650-9D3E-9EAE3D9BC670) on the D3D11 device via its
+//     take_ownership_from_abi constructor. There is NO
+//     IsCreationDenied member in this SDK and NO session/item Closed
+//     events in the projection — a vanished/occluded source is
+//     detected via consecutive TryGetNextFrame()==nullptr (registry
+//     destroy news is the primary teardown driver; this is the safety
+//     net).
 //   * Events: winrt::event_token + token overloads (attach =
 //     FrameArrived(handler), detach = FrameArrived(token)); there is no
 //     winrt::event_registration in this SDK's cppwinrt.
@@ -52,6 +65,14 @@
 
 #include <d3d11.h>
 #include <dwmapi.h>
+// Raw COM interop header (SDK 26100): declares
+// IDirect3DDxgiInterfaceAccess (uuid A9B3D012-3DF2-4EE3-B8D1-
+// 8695F457D3C1) — the documented way to obtain the DXGI/D3D11
+// interfaces from a WGC frame surface. In this SDK the header no
+// longer declares the raw COM IDirect3DDevice/IDirect3DSurface
+// interfaces (they are IInspectable-based projected types in
+// cppwinrt; see the notes above).
+#include <windows.graphics.directx.direct3d11.interop.h>
 
 #include <winrt/base.h>
 #include <winrt/Windows.Foundation.h>
@@ -262,15 +283,21 @@ core::CaptureError WgcCaptureSource::startOnThread(Surface& s) {
     hr = s.device->QueryInterface(winrt::guid_of<IDirect3DDevice>(),
                                   &wgc_device);
     if (FAILED(hr) || !wgc_device) return CaptureError::InternalError;
-    winrt::com_ptr<IDirect3DDevice> device_view(
-        wgc_device, winrt::take_ownership_from_abi);
+    // SDK 26100 (2026 rework, runner-verified): winrt's
+    // IDirect3DDevice is a projected IInspectable-based interface
+    // (NOVTABLE abi exposing Trim()), NOT a COM-interop type —
+    // com_ptr<> no longer applies (C2440 at operator*). Construct
+    // the projected type directly from the ABI pointer via its
+    // public take-ownership constructor (the pool takes its own
+    // reference; the local releases at scope exit).
+    IDirect3DDevice device_view(wgc_device, winrt::take_ownership_from_abi);
 
     // 3. Free-threaded frame pool (Win10 1809+): FrameArrived fires on
     //    the pool's internal worker thread — no message pump needed.
     SizeInt32 maxDim{static_cast<int32_t>(s.max_w),
                      static_cast<int32_t>(s.max_h)};
     s.pool = Direct3D11CaptureFramePool::CreateFreeThreaded(
-        *device_view, DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, maxDim);
+        device_view, DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, maxDim);
     if (!s.pool) return CaptureError::InternalError;
 
     // 4. Session (no capture border).
@@ -320,11 +347,30 @@ core::CaptureError WgcCaptureSource::startOnThread(Surface& s) {
           // recreate the session with the new size).
           return;
         }
-        // The frame surface's ABI is the ID3D11Texture2D directly
-        // (this cppwinrt's get_abi yields the raw ABI pointer).
-        ID3D11Texture2D* texture =
-            static_cast<ID3D11Texture2D*>(winrt::get_abi(dsurface));
-        if (!texture) return;
+        // SDK 26100 (2026 rework, runner-verified): the projected
+        // surface is an IInspectable wrapper — its ABI pointer is NOT
+        // the D3D11 texture's vtable, and the raw COM
+        // IDirect3DSurface (GetBuffer) is gone from the SDK. The
+        // documented WGC pixel path: QI the surface for
+        // IDirect3DDxgiInterfaceAccess, then GetInterface
+        // (IID_ID3D11Texture2D).
+        auto* surface_inspectable =
+            static_cast<IInspectable*>(winrt::get_abi(dsurface));
+        ::Windows::Graphics::DirectX::Direct3D11::
+            IDirect3DDxgiInterfaceAccess* dxgi_access = nullptr;
+        if (FAILED(surface_inspectable->QueryInterface(
+                __uuidof(
+                    ::Windows::Graphics::DirectX::Direct3D11::
+                        IDirect3DDxgiInterfaceAccess),
+                reinterpret_cast<void**>(&dxgi_access))) ||
+            !dxgi_access) {
+          return;
+        }
+        ID3D11Texture2D* texture = nullptr;
+        const HRESULT access_hr = dxgi_access->GetInterface(
+            __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&texture));
+        dxgi_access->Release();
+        if (FAILED(access_hr) || !texture) return;
         // (Re)create the staging texture for the current frame size.
         if (!s.staging || s.staging_w != static_cast<uint32_t>(w) ||
             s.staging_h != static_cast<uint32_t>(h)) {
@@ -348,6 +394,7 @@ core::CaptureError WgcCaptureSource::startOnThread(Surface& s) {
         // Bounded copy: this window's frame only (no full-screen
         // readback), row pitch handled.
         s.ctx->CopyResource(s.staging.get(), texture);
+        texture->Release();  // GetInterface reference; copy is done
         D3D11_MAPPED_SUBRESOURCE mapped{};
         if (FAILED(s.ctx->Map(s.staging.get(), 0, D3D11_MAP_READ, 0,
                               &mapped))) {

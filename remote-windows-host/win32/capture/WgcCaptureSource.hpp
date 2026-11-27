@@ -31,10 +31,14 @@
 //     destroy news remains the primary teardown driver.
 //   * Frames: Direct3D11CaptureFrame::Surface() (this SDK's projection
 //     name; ABI get_Surface) returns
-//     Windows::Graphics::DirectX::Direct3D11::IDirect3DSurface whose
-//     ABI is ID3D11Texture2D (winrt::get_abi); correct pixel
-//     dimensions at any DPI (physical pixels; the request geometry is
-//     physical client size × window DPI scale).
+//     Windows::Graphics::DirectX::Direct3D11::IDirect3DSurface — in
+//     SDK 26100 a projected IInspectable-based interface (Description()
+//     only; the raw COM GetBuffer is gone from the um interop header),
+//     so the D3D11 texture is obtained via
+//     IDirect3DDxgiInterfaceAccess::GetInterface (the documented WGC
+//     pixel path). Correct pixel dimensions at any DPI (physical
+//     pixels; the request geometry is physical client size × window
+//     DPI scale).
 //   * Consent (mandatory gate): GraphicsCaptureAccess.RequestAccessAsync(
 //     GraphicsCaptureAccessKind::Programmatic) →
 //     IAsyncOperation<AppCapabilityAccessStatus> — Win10 2104 (20348)+.
