@@ -30,6 +30,7 @@ merge.)
 
 | Item | Evidence |
 |---|---|
+| Per-window capture-session pipeline (RW-H-011 Stage 1, H-MEDIA, plan FR-03/FR-06): `core/capture_source.{hpp}` (portable `ICaptureSurfaceSource` seam: `startSurface`/`stopSurface`, `CapturedFrame{window_id, seq, timestamp, w, h, format, payload}` → `IFrameConsumer`, typed `CaptureError{None, ConsentRequired, SourceClosed, SurfaceNotAvailable, InternalError}`), `core/capture_encoder.{hpp}` (`IVideoEncoder`/`IVideoEncoderFactory`/`IEncodedFrameConsumer` per-session encoder seam — the RW-H-007 media core plugs in here; no media-core files touched), `core/capture_gate.{hpp,cpp}` (bounded per-session `FrameGate`: fixed max depth, drop-oldest-obsolete, thread-safe, `droppedCount`), `core/capture_session_manager.{hpp,cpp}` (`CaptureSessionManager`: consumes the real `WindowRegistry` notification vector from the app layer — Announce/Reannounce → FR-03 auto-share (independently rendered surface of an already-shared app session starts its own session with NO manual request, ANY pid, correlation from the registry; ChildControl never), parent retention (dialog destroy stops only the dialog), destroy → stop ONLY that session, minimize → Pause (default, configurable `LowFps` at `minimize_low_fps`), resume = fresh surface start + IDR, size/dpi change → coalesced session recreation (stop+start, new geometry, IDR; position-only moves do NOT recreate), `SourceClosed` → session Ended + bounded recreation attempts (`max_recreate_attempts`) on later registry news + IDR on restart, per-session worker thread (isolation: one slow/dead encoder never blocks others), per-session `CaptureSessionMetrics` (frames received/delivered/dropped, queue depth + max depth, keyframe requests, last-frame ts, geometry, error count, state) for later STREAM_STATUS/PERFORMANCE_STATS) | 16 new test cases in `tests/capture_pipeline_test.cpp` (portable; fake source + real `WindowRegistry` + scripted notifications): per-window independence (stop A keeps B), unshare/reshare resource release, auto-share of auxiliary surface (different pid, same app_session_id, zero manual calls), ChildControl never auto-shared, parent retention + dialog-destroy-stops-only-dialog, minimize pause/resume with fresh frame + IDR, LowFps policy configurable, share-while-minimized starts paused, size-change recreation (stopSurface + IDR, new geometry), position-only move no-recreate, drop-obsolete bounded at fixed depth (bound asserted under load, accounting identity received==delivered+dropped+queue), metrics correctness, `SourceClosed` isolation + recreate, `SourceClosed` bounded-attempts exhaustion, `ConsentRequired` typed error surfaced with no shared session left. macOS **194/194 CTest** (previous 178 + 16 new, 0 failed; commands below). Win32 WGC adapter = Stage 2 (this branch) |
 | Window registry core (RW-H-010 Stage 1, H-WINDOWS, plan FR-03): `core/window_registry.{hpp,cpp}` — live registry of top-level windows; durable `window_id` = UUID v4 assigned once at first sight (HWND never the remote identity, ADR-0006); full `WindowRecord` (hwnd transient, pid/tid, title, class, DPI-aware client-area geometry, visible/enabled/minimized/maximized, z-order rank, active, owner/parent/root-owner native edges + resolved remote window_ids, role, modality, app_session_id, surface kind); event state machine (create/show/hide/destroy/name-change/location-change/z-order/focus/minimize/restore/enable) with idempotent re-delivery and HWND-recycling → fresh UUID; reconciliation scan ("scan wins for current truth, events win for history" via per-field event recency) recovering missed creates/destroys, idempotent; relationship graph (owner/parent resolution incl. late-owner Reannounce, nested root-owner chains); ADR-0006 session correlation (owner/root-owner chain cross-PID, corroborated pid-set, focus-transition chain — PID alone NEVER correlates, explicit counter-example test); surface classification (WS_CHILD-style = ChildControl, never a duplicate capture stream; owned/popup top-levels = own stream); modality inference (none / window-modal / app-modal from owner + owner+sibling enabled state, portable seam) | 33 new test cases in `tests/window_registry_test.cpp` (lifecycle, HWND reuse, reconciliation, nested/cross-PID dialogs, z-order, focus, destroy cleanup, anti-pattern correlation, surface, modality, session grouping) — macOS **178/178 CTest** (previous 145 + 33 new, 0 failed; commands below). Win32 adapter = Stage 2, **DONE and runner-verified at `6ea4591`** (evidence in the Windows runner table) — NOT RUN on macOS by design: Win32 targets do not compile there |
 | Protocol contract v0.1.0 (schema, VERSION, 22 test vectors, export tool) | `tools/export_protocol.sh` runs, produces **per-file** `SHA256SUMS` (fixed 2026-11-24: the old script hashed the printed file list, yielding one `-:` entry; now `sha256sum` over each file); export re-verified 25/25 |
 | `core/` portable protocol model: types, JSON codec, semantic validation, version parsing, FPS gate, catalog, window relationships, input/key mapping, pairing, power policy, authorization | 104/104 CTest tests pass (commands below) |
@@ -51,38 +52,37 @@ cmake -S remote-windows-host -B remote-windows-host/build
 cmake --build remote-windows-host/build -j
 ctest --test-dir remote-windows-host/build --output-on-failure
 ```
-Result: 2026-11-27 (RW-H-010, final branch state `6ea4591`; re-verified
-on merged main @ `c97bbbf48f3d2aa5bb7de9abc5d41922c8a4174c` — same
-commands, build exit 0, 178/178), macOS 27.2.1, CMake 4.5.1, Ninja
-1.13.2, clang (Apple). Build clean (exit 0).
-**178/178 tests PASSED** (previous 145 + 33 new `window_registry_test`
-cases, 0 failed).
-The 33 new cases: WindowRegistryLifecycle (11: full-field announce with
-UUID identity, HWND recycling → fresh window_id, name/location/z-order
-updates + idempotent re-delivery, hide/show, minimize/restore, focus
-active-flag handoff, destroy-removal with parent survival, owner-death
-clears child's resolved owner id, missed-create materialization),
-Reconciliation (6: missed-CREATE recovery from scan, missed-DESTROY
-recovery ("unavailable"), scan-wins-for-current-truth, events-win-for-history
-over a stale scan, scan idempotency, scripted multi-miss sequence),
-Relationships (6: early-owner announce carries owner id, late-owner
-Reannounce, nested root-owner chain, cross-PID brokered dialog
-correlated via owner chain, PID-alone counter-example (same PID in two
-sessions' pid sets → uncorrelated), focus-transition correlation after
-late anchor), SurfaceClassification (3: child control never a separate
-stream, owned popup is its own surface, child-inside-tracked-parent),
-Modality (4: no-owner never modal, enabled owner → window-modal,
-owner+siblings disabled → app-modal transition both ways, enabled sibling
-keeps window-modal), AppSession (3: primary-pid first top-level anchors,
-explicit association → auxiliary role, zero-geometry helper does not
-steal the anchor). The Win32 adapter test suites
-(STAGE 2) build ONLY on Windows — on macOS they are excluded from the
-CTest set (per AGENTS.md: Win32 targets do not compile on macOS; recorded
-as NOT RUN there). Earlier suites (sha256, protocol_version, protocol_json
-incl. 22 canonical vectors, validation, fps_policy, catalog,
-window_relationships, input, pairing, power_policy, authorization, framing,
-signaling_e2e, session_auth, the RW-H-007 media suites, and the RW-H-008
-catalog_service suite) unchanged and green at their prior counts.
+Result: 2026-11-27 (RW-H-011 Stage 1; branch `agent/H-MEDIA/RW-H-011`), macOS 27.2.1, CMake 4.5.1, Ninja 1.13.2, clang (Apple). Build clean (exit 0).
+**194/194 tests PASSED** (previous 178 + 16 new `capture_pipeline_test`
+cases, 0 failed; re-verified over 5 consecutive full-suite runs).
+The 16 new cases: CaptureGate (2: bounded drop-oldest under overflow,
+drop counting) + CapturePipeline (14: explicit share runs the full
+pipeline to the sink; `ConsentRequired` typed error surfaced with NO
+shared session left; per-window independence (stop A keeps B); unshare
+releases resources and reshare works; auto-share of an auxiliary surface
+with a DIFFERENT pid in the same app session (zero manual calls);
+ChildControl never auto-shared; parent retention (parent alive while a
+dialog session is active) + dialog destroy stops only the dialog;
+minimize → Pause then restore → fresh frame + IDR; `LowFps` minimize
+policy configurable; share-while-minimized starts paused; size change →
+session recreation (adapter surface stopped, new geometry, IDR requested);
+position-only move does NOT recreate; drop-obsolete gate bounded at fixed
+depth under 400-frame load with the accounting identity
+received==delivered+dropped+queue; per-session metrics
+(counts/timestamps/state/geometry) correct; `SourceClosed` isolates
+sessions and recreates; `SourceClosed` exhausts bounded recreation
+attempts). The Win32 WGC adapter suites (Stage 2) build ONLY on Windows —
+on macOS they are excluded from the CTest set (per AGENTS.md: Win32
+targets do not compile on macOS; recorded as NOT RUN there). Earlier
+suites (sha256, protocol_version, protocol_json incl. 22 canonical
+vectors, validation, fps_policy, catalog, window_relationships, input,
+pairing, power_policy, authorization, framing, signaling_e2e,
+session_auth, the RW-H-007 media suites, the RW-H-008 catalog_service
+suite, and the RW-H-010 window_registry suite) unchanged and green at
+their prior counts. Prior build record: RW-H-010 final branch state
+`6ea4591` re-verified on merged main @
+`c97bbbf48f3d2aa5bb7de9abc5d41922c8a4174c` (same commands, build exit 0,
+178/178).
 
 ## Windows runner (Section 18.4) — verified
 

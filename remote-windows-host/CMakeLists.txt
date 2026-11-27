@@ -30,7 +30,9 @@ add_library(rwh_core STATIC
   core/input.cpp
   core/pairing.cpp
   core/power_policy.cpp
-  core/authorization.cpp)
+  core/authorization.cpp
+  core/capture_gate.cpp
+  core/capture_session_manager.cpp)
 target_include_directories(rwh_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(rwh_core PUBLIC nlohmann_json)
 
