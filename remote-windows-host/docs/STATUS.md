@@ -1,30 +1,36 @@
 # Windows Host — STATUS
 
-Last updated: 2026-11-27 (RW-H-010 INTEGRATED — merged into main @
-`c97bbbf48f3d2aa5bb7de9abc5d41922c8a4174c` (fast-forward from
-`8147dcd`); merged-revision verification: **178/178 macOS CTest** +
-**Windows runner @ `c97bbbf`: build exit 0 (`RWH status=build_ok`) +
-196/196 unit tests (`RWH status=tests_ok`)**; pre-merge branch state
-`agent/H-WINDOWS/RW-H-010` @ `6ea4591` (code-identical tip): Stage 1
-portable window-registry core — live window registry with UUID
-window_ids, owner/parent relationship graph, cross-PID auxiliary
-correlation (ADR-0006), modality inference, snapshot reconciliation —
-**178/178 macOS CTest** (145 prior + 33 new); Stage 2 Win32 WinEvents
-adapter (`win32/windows/`) + hermetic Windows integration test —
-**Windows runner @ `6ea4591`: build exit 0 + 196/196 unit tests
-(RWH status=tests_ok)**, interactive-session re-run 6/6 PASSED,
-evidence in the Windows runner table below. RW-H-009
-Win32 catalog remains the last fully-verified Windows item: runner
-**157/157 unit tests + selftest_ok @ `7bb5687`** after four runner
-feedback rounds — MSVC build fixes, a 3.5 h session-0 launch hang triaged
-and root-caused, ctest per-test timeout + 25-min watchdog added, and
-launch/scan correctness fixes (pre-resolve .lnk targets, no
-`SLGP_FILESYSTEM` in the Start Menu scan, ms-appx URI fixtures that do not
-persist on 24H2). macOS 145/145 at that SHA. RW-H-008: 143/143 macOS +
-Windows runner 146/146 @ `d342bb3`; see "Implemented and verified" below.
-Client C-MEDIA (RW-C-003) media channel merged into main at `c5320e3` on
-2026-11-25 (client `docs/STATUS.md`); the host tree was unchanged by that
-merge.)
+Last updated: 2026-11-27 (RW-H-011 INTEGRATED — merged into main @
+`d363c93d955e79e2cc1f0a9da8a2cca3ebb488ff` (fast-forward from
+`42e46b7`); merged-revision verification: **194/194 macOS CTest** (exit
+0) + **Windows runner @ `d363c93`: build exit 0 (`RWH status=build_ok`)
++ 213/213 unit tests = 212 passed + 1 skipped by design (`RWH
+status=tests_ok`, `RWH ctest_exit=0`)** — #213
+`WgcCapture.HermeticConsentGatedPipeline` skips cleanly in session 0
+(hermetic consent-gated live-capture test; the live frame path through
+the real adapter is still BLOCKED, tracked as RW-H-011b). Pre-merge
+branch state `agent/H-MEDIA/RW-H-011` @ `d363c93` (code-identical tip):
+Stage 1 portable capture-session pipeline (FR-03/FR-06) —
+`ICaptureSurfaceSource`/`IFrameConsumer` seams with typed
+`CaptureError{ConsentRequired, SourceClosed, ...}`, `CaptureSessionManager`
+(auto-share of auxiliary windows from the `WindowRegistry`, parent
+retention, minimize-pause, size-change recreation + IDR, `SourceClosed`
+isolation), bounded drop-obsolete `FrameGate`, per-session metrics,
+encoder seam over the RW-H-007 media-core factory (no media-core files
+modified) — **194/194 macOS CTest** (178 prior + 16 new
+`capture_pipeline_test`); Stage 2 Win32 WGC adapter
+(`win32/capture/WgcCaptureSource`: per-surface `GraphicsCaptureItem` +
+D3D11 frame pool, consent gate via `RequestAccessAsync(Programmatic)`
+bounded poll, null-frame×30 `SourceClosed` safety net) + hermetic
+consent-gated Windows test — **Windows runner @ `d363c93`: build ok +
+212 passed / 1 skipped (`RWH status=tests_ok`)**; pre-task runner
+baseline 196/196 @ `42e46b7`. RW-H-010 window registry remains merged
+into main @ `c97bbbf48f3d2aa5bb7de9abc5d41922c8a4174c` (178/178 macOS +
+Windows runner build_ok + 196/196 @ `c97bbbf`); RW-H-009 Win32 catalog
+is the last fully-verified Windows item (157/157 + selftest_ok @
+`7bb5687`). Client C-MEDIA (RW-C-003) media channel merged into main at
+`c5320e3` on 2026-11-25 (client `docs/STATUS.md`); the host tree was
+unchanged by that merge.)
 
 ## Implemented and verified
 
