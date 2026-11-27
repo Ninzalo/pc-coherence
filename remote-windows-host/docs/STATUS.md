@@ -1,16 +1,45 @@
 # Windows Host — STATUS
 
-Last updated: 2026-11-27 (RW-H-011 INTEGRATED — merged into main @
-`d363c93d955e79e2cc1f0a9da8a2cca3ebb488ff` (fast-forward from
-`42e46b7`); merged-revision verification: **194/194 macOS CTest** (exit
-0) + **Windows runner @ `d363c93`: build exit 0 (`RWH status=build_ok`)
-+ 213/213 unit tests = 212 passed + 1 skipped by design (`RWH
-status=tests_ok`, `RWH ctest_exit=0`)** — #213
+Last updated: 2026-11-27 (RW-H-011b FIXED + VERIFIED — the open RW-H-011
+live-frame defect is resolved on branch `agent/H-MEDIA/RW-H-011b` @
+`191caa26d90db2b737b93f3ee3d0d46b73dc5a86` (from main @ `f51f2e4`; NOT
+merged). Root cause: the hermetic WGC test's FakeEncoder violated the
+IVideoEncoder seam contract (it never pushed encoded frames to the
+sink), so frames_delivered / sink counts were structurally zero
+regardless of adapter health — the permanent stage-counter table proved
+the real adapter delivered 58/58 live frames in 15 s (emitted=58,
+received=58, encoded=58, delivered=0, sink=0). Fix: the fake now pushes
+one stub EncodedFrame per source frame (`tests/win32_wgc_capture_test.cpp`
+only — NO adapter/manager change needed). Verified @ `191caa2`: Windows
+runner `RWH status=build_ok` + session-0 unit tests **213/213 = 212
+passed + #213 skipped by design** (`RWH status=tests_ok`) +
+**INTERACTIVE hermetic test PASSED in 1.29 s** (≥5 live frames @ 320×200,
+correct window_id routing, clean release, counters sane); macOS
+**194/194 CTest** @ same SHA. Permanent diagnostics added in the same
+branch: per-surface stage counters in the WGC adapter
+(frames_arrived / frames_wait_returned / null_frames / size_skips /
+qi_failures / copy_failures / emitted / handler_errors) + frameStats()
+accessor + structured start/stop/error log lines (counts/sizes/ids only)
++ `--wgc-diag` stage-table mode in the hermetic test. SDK 26100 doc-check
+findings (2026-11-27, verified against installed headers):
+`DirectXPixelFormat::B8G8R8A8UIntNormalized = 87` in the 26100 cppwinrt
+projection (= the compositor's frame format — pool format ruled out as
+the starve suspect) and `ID3D11DeviceContext::CopyResource` now returns
+void and throws on failure (C2440). Pre-task state: RW-H-011 INTEGRATED
+into main @ `d363c93d955e79e2cc1f0a9da8a2cca3ebb488ff`
+(194/194 macOS + 213/213 Windows; the live frame path through the real
+adapter was BLOCKED pending this task).)
+
+Earlier header state (preserved for context — RW-H-011 INTEGRATED —
+merged into main @ `d363c93d955e79e2cc1f0a9da8a2cca3ebb488ff`
+(fast-forward from `42e46b7`); merged-revision verification: **194/194
+macOS CTest** (exit 0) + **Windows runner @ `d363c93`: build exit 0
+(`RWH status=build_ok`) + 213/213 unit tests = 212 passed + 1 skipped
+by design (`RWH status=tests_ok`, `RWH ctest_exit=0`)** — #213
 `WgcCapture.HermeticConsentGatedPipeline` skips cleanly in session 0
-(hermetic consent-gated live-capture test; the live frame path through
-the real adapter is still BLOCKED, tracked as RW-H-011b). Pre-merge
-branch state `agent/H-MEDIA/RW-H-011` @ `d363c93` (code-identical tip):
-Stage 1 portable capture-session pipeline (FR-03/FR-06) —
+(hermetic consent-gated live-capture test). Pre-merge branch state
+`agent/H-MEDIA/RW-H-011` @ `d363c93` (code-identical tip): Stage 1
+portable capture-session pipeline (FR-03/FR-06) —
 `ICaptureSurfaceSource`/`IFrameConsumer` seams with typed
 `CaptureError{ConsentRequired, SourceClosed, ...}`, `CaptureSessionManager`
 (auto-share of auxiliary windows from the `WindowRegistry`, parent
@@ -106,6 +135,7 @@ their prior counts. Prior build record: RW-H-010 final branch state
 | RW-H-009 unit tests / selftest at the final SHA | `prepare` + `unit-tests` + `selftest` @ `7bb56873ae575e2da641c949f2f2fb74fb9532bd` (2026-11-25, after rounds 3–4 above): `RWH status=prepared`, **`100% tests passed out of 157`** (145 portable + 3 CNG + 9 WIN32-only: 5 `StartMenuSource` + 4 `Win32Launcher`), `Total Test time (real) = 0.91 s`, `RWH ctest_exit=0`, `RWH status=tests_ok` (MSVC 14.51.36231 / SDK 10.0.26100, RelWithDebInfo, Ninja; full chain exit 0); `selftest` → `{"selftest":true,"passed":true,"stage":"","port":47987,"reply_kind":"launch_result","envelopes":5,"pairing":"accepted","reply_kinds":"hello;pairing_challenge;pairing_result;app_catalog;launch_result;launch_result","error":"","catalog_entries":3,"launch":"started","launch_unknown":"rejected"}`, `RWH selftest_exit=0`, `RWH status=selftest_ok` |
 | RW-H-010 Stage 2 — Win32 window-registry adapter (2026-11-27, task-branch SHA `6ea4591f273648e9abf0bd06d95d41fc298baa86`, branch `agent/H-WINDOWS/RW-H-010` — the runner's `prepare` fetches only `origin/main`, so the runner checkout was fetched + checked out to the task-branch SHA directly over ssh, then the allow-listed `build`/`unit-tests` actions ran against it) | `windows-runner.sh build` @ `6ea4591`: exit 0, all 32 targets linked incl. `win32_windows_registry_test.exe` — first MSVC compile of `win32/windows/Win32WindowSource.cpp` (clean: no SDK/MSVC discrepancies found; MSVC 14.51.36231, SDK 10.0.26100.0, RelWithDebInfo, Ninja), `RWH status=build_ok`. `windows-runner.sh unit-tests` @ `6ea4591` (session 0): **`100% tests passed out of 196`** (157 pre-task baseline + 33 core `window_registry_test` + 6 `Win32WindowsRegistryTest`), `Total Test time (real) = 15.61 s`, `RWH ctest_exit=0`, `RWH status=tests_ok`; all 6 hermetic adapter tests `Passed` individually (tests #191–#196: UUID announce + geometry, owned-dialog owner/links/modality, owner-disable → app-modal, dialog-destroy parent survival, initial-scan recovery, title-change + minimize/restore). **Interactive-session re-run** (schtasks on the user's desktop, same SHA): **6/6 PASSED in 5.23 s**, no leftover processes, no failure dumps. WinEvent API details verified against Microsoft docs 2026-11-27 (SetWinEventHook runs on the creating thread's message loop → dedicated hook thread with pump; EVENT_OBJECT_* 0x8000..0x800C; EnumWindows; GetWindow(GW_OWNER); GetAncestor(GA_ROOTOWNER); GetWindowThreadProcessId; DWM/DPI). **Live 24H2 build-26300 findings** (probe-verified on this PC, recorded in code comments): (a) a NULL-window `SetTimer` on the hook thread NEVER ticks (session 0 AND interactive) → reconciliation cadence runs on a dedicated thread posting `kScanNowMsg` to the hook thread; (b) SW_MINIMIZE/SW_RESTORE emit only LOCATIONCHANGE/REORDER — NO STATECHANGE → the adapter refreshes enabled/minimized/maximized on those events too; (c) the OS creates transient invisible zero-client-area helper windows in an app's own process whose CREATE can precede the main window's → the session-anchor heuristic requires a non-zero client area (portable regression test `AppSession.ZeroGeometryHelperDoesNotStealAnchor`). Session-0 context (sshd): `IsWindowVisible` always FALSE and SW_MINIMIZE is a no-op — the integration test is session-context-aware and asserts per context (structured fields only, no window contents in logs) |
 | RW-H-011 Stage 2 — Win32 WGC capture adapter + hermetic test (2026-11-27, task-branch SHA `f397e5329140243c102c1ef49bd3d46bf277a`, branch `agent/H-MEDIA/RW-H-011`; runner checkout = the task-branch SHA directly, as in RW-H-010) | runner internal build green @ `f397e53` (all targets incl. `rwh-host.exe`, `win32_wgc_capture_test.exe`, `rwh_win32_capture` lib; MSVC 14.51.36231 / SDK 10.0.26100.0, RelWithDebInfo, Ninja). Session-0 unit tests @ `f397e53`: first run `99% tests passed, 2 tests failed out of 213` — the 2 loopback-E2E flake class: `147 SignalingE2E.MalformedFramesCountedNotCrash` (Failed) and `168 SessionAuthE2E.PairedServicesHeartbeatPiggyback` (SEGFAULT); both PASS on the immediate re-run and the RW-H-011 diff only touches `tests/win32_wgc_capture_test.cpp` (unrelated — recorded honestly, not as 213/213-on-first-run). Re-run: 213/213 executed, 212 passed + 1 skipped by design (`#213 WgcCapture.HermeticConsentGatedPipeline` — live-capture assertions SKIP in session 0), `Total Test time (real) = 18.29 s`, `RWH ctest_exit=0`, `RWH status=tests_ok`. **Interactive hermetic test** (schtasks, user session 6, same SHA): clean SKIP, `EXIT_CODE=0`, `win32_wgc_capture_test.cpp(267): Skipped — fewer than 5 WGC frames within 15000 ms — headless session (no desktop) or the capture is not delivering; live-capture assertions NOT RUN in this context. Run interactive (schtasks) to verify.` (log `C:\rwh\wgc_interactive_f397.log`) — the live path IS entered (consent granted: user clicked the OS prompt during earlier probing) but <5 frames arrived in 15 s. **Live-capture bisect (hand-rolled probe v8b on the PC, `C:\rwh\wgc_probe\`, NOT in the repo)**: consent × frame-thread-message-pump matrix, 4 configs — every config reached `W16: StartCapture ok`, `F1: FrameArrived`, `F3: desc w=320 h=200 fmt=87` and delivered exactly 1 frame (the initial composite — the probe window is static after its first paint, and WGC emits frames on content change), `W17: wait done frames=1 null=0 drops=0`, rc=25: A (consent + nopump) = 1, B (consent + pump) = 1, C (noconsent + nopump) = 1, D (noconsent + pump) = 1 → a message pump on the frame thread is NOT the differentiator (the pool thread delivers the initial frame with or without pumping) and the bounded RequestAccessAsync gate does not block (a freshly-built probe exe got `C1: consent Allowed` immediately with no new prompt click, and capture works even with the gate skipped — the consent state on this PC appears per-user; the adapter's documented gate still applies). The residual defect sits in the REAL adapter/manager frame path (probe v8a through the real adapter: session Running, delivered=0 — while the hand-rolled pool-thread handler delivered the initial frame) — live-capture verification is BLOCKED pending that adapter-internal diagnosis (not chased further in this task). **Consent state**: Programmatic WGC consent prompt granted by user click (2026-11-27, earlier probe); NOTE: the production `rwh-host.exe` will need its own one-time consent = remaining USER ACTION (per the matrix observation the consent state appears per-user on this PC, so the bounded gate should return Allowed without a prompt; re-verify on first production run). **SDK 10.0.26100 rework findings** (probe-verified; all recorded in code comments): (a) the consent status enum lives in the NESTED winrt namespace `winrt::Windows::Security::Authorization::AppCapabilityAccess` (enum type: impl header line 24; statics like `::Allowed` in the same nested namespace: winrt header line 351) — the flat path `winrt::Windows::Security::Authorization::AppCapabilityAccessStatus` FAILS on this SDK (C2039 not a member + C2873 using-declaration); the compiled spelling was verified byte-exact (od) before the probe built green (`CL_EXIT=0` after the one known fix = the missing nested-namespace segment). (b) `IID_IDXGIDevice` moved to `dxguid.lib` in SDK 26100 (else LNK2019). (c) the UMP composition include chain pulls legacy-projection headers that collide with cppwinrt names → qualify `AsyncStatus` (C2872), plain HRESULT sentinel in WGC item interop (C2737), `IInspectable` ambiguity resolved; the using-declaration form (not a fully-qualified alias) is the collision-free form. WGC API doc-check 2026-11-27 (see the adapter row above). |
+| RW-H-011b — WGC frame-path diagnosis + fix (2026-11-27; branch `agent/H-MEDIA/RW-H-011b`, base main @ `f51f2e4`, final SHA `191caa26d90db2b737b93f3ee3d0d46b73dc5a86`; NOT merged) | `prepare <branch-sha>` (fetch+checkout) + `build` + `unit-tests` (session 0) + INTERACTIVE schtasks runs of the hermetic test with `--wgc-diag` (user session) | **DEFECT FIXED + VERIFIED.** Commits: `de86794` (permanent per-stage counters `frames_arrived`/`frames_wait_returned`/`null_frames`/`size_skips`/`qi_failures`/`copy_failures`/`emitted`/`handler_errors` in the adapter + `frameStats()` + structured start/stop/error log lines (counts/sizes/ids only) + `--wgc-diag` stage-table mode; macOS 194/194 @ that SHA); `76038e1` (MSVC C2653: qualify `remotewindows::core::CaptureError` in the global-scope `errorToken()` helper); `7dc6d4d` (MSVC C2440: SDK 26100 `ID3D11DeviceContext::CopyResource` is void-return + throws → try/catch, skip-and-count); `191caa2` (ROOT-CAUSE FIX — the hermetic test's `FakeEncoder` violated the `IVideoEncoder` seam contract: it only counted frames internally and never called the sink given at construction, so `frames_delivered`/`sink_count` were structurally 0 regardless of adapter health; the fake now holds the sink ref and pushes one stub `EncodedFrame` per source frame, mirroring the portable pipeline test's fake; also asserts `frames_received >= 5` at the gate so live flow is pinned independently of the encoder double). **Diagnostic stage table** (interactive, `7dc6d4d`, 15 s, animated 320×200 window, verbatim): adapter `frames_arrived=58 frames_wait_returned=58 null_frames=0 size_skips=0 qi_failures=0 copy_failures=0 emitted=58 handler_errors=0`; manager `frames_received=58 frames_delivered=0 frames_dropped=0 queue_depth=0 queue_max_depth=8 error_count=0 surface_starts=1 keyframe_requests=1`; `fake_encoder encoded=58 keyframes=1 sink_count=0` → first zero-count stage = **encoder→sink** (inside the test double — NOT the adapter or manager; the real WGC adapter and manager were healthy: 58/58 live frames). **Final verification @ `191caa2`** (interactive, verbatim): `[wgc] start window_id=6f9c3a2e-1b4d-4c7a-9e2f-8a3d5b7c9e01 err=none size=320x200`; stage table `frames_arrived=5 frames_wait_returned=5 null_frames=0 size_skips=0 qi_failures=0 copy_failures=0 emitted=5 handler_errors=0`; manager `frames_received=5 frames_delivered=5 frames_dropped=0 queue_depth=0 queue_max_depth=8 error_count=0 surface_starts=1 keyframe_requests=1`; `fake_encoder encoded=5 keyframes=1 sink_count=5`; `[wgc] stop … err=none size=320x200 arrived=5 wait_ok=5 null=0 size_skip=0 qi_fail=0 copy_fail=0 emitted=5 handler_err=0`; **`[       OK ] WgcCapture.HermeticConsentGatedPipeline (1292 ms)` / `[  PASSED  ] 1 test.`** — ≥5 live frames @ exact 320×200, correct window_id routing (`sink.countFor(kTestId) == frames_delivered == 5`), clean release (unshare → `CaptureError::None`, state Inactive, `surfaceCount()==0`, `isShared()==false`, all bounded waits satisfied). Session 0 @ `191caa2`: `RWH status=build_ok`; `100% tests passed out of 213` — **212 passed + #213 `WgcCapture.HermeticConsentGatedPipeline` Skipped by design** (2.06 s), `Total Test time (real) = 18.44 sec`, `RWH ctest_exit=0`, `RWH status=tests_ok`. macOS @ `191caa2`: **194/194 CTest** (1.77 s, exit 0). SDK 26100 doc-check findings (2026-11-27, verified against installed headers on the runner): `DirectXPixelFormat::B8G8R8A8UIntNormalized = 87` in `10.0.26100.0\cppwinrt\winrt\impl\windows.graphics.directx.0.h` (= the compositor's frame format — the pool format list was never the starve suspect) and `ID3D11DeviceContext::CopyResource` returns `void` + throws (`10.0.26100.0\um\d3d11.h:8083`) — pre-26100 `FAILED(CopyResource(...))` usage is C2440. PC cleanup: `rwh_wgc_diag` scheduled task deleted (only pre-existing `rwh_probe`/`rwh_winreg`/`rwh_winreg_test` remain), `C:\rwh\wgc_diag.log` removed, no stray processes; runner checkout left at `191caa2` (clean). |
 
 ## Windows Host app shell (H-FOUND) — verified
 
@@ -339,9 +369,10 @@ Windows runner (DESKTOP-PC), 2026-11-24:
 
 ## Implemented, NOT verified on Windows
 
-- Win32 adapters (`win32/`): capture (WGC) is IMPLEMENTED and build-verified
-  (RW-H-011 Stage 2 — the live-capture frame path is BLOCKED, see the Windows runner
-  table); input (SendInput), power (SetSuspendState / InitiateSystemShutdownEx) —
+- Win32 adapters (`win32/`): capture (WGC) is IMPLEMENTED, build-verified,
+  and live-frame-verified (RW-H-011 Stage 2 + RW-H-011b fix — the live
+  capture path is PASSING interactively, see the Windows runner table);
+  input (SendInput), power (SetSuspendState / InitiateSystemShutdownEx) —
   **NOT RUN** — not implemented yet (next feature tracks: H-INPUT/H-POWER). The
   Win32 catalog adapters are DONE and verified (RW-H-009, evidence
   above); the Win32 window-registry adapter is DONE and runner-verified
@@ -360,13 +391,14 @@ Windows runner (DESKTOP-PC), 2026-11-24:
    committed `7bb5687`; input-pipeline integration is scoped out of the
    packet — it needs C-WINDOWS/H-INPUT).
 2. H-MEDIA (Host): RW-H-011 Win32 WGC capture — Stage 2 DELIVERED on branch
-   `agent/H-MEDIA/RW-H-011` (adapter + hermetic consent-gated test; Windows runner
-   build green + session-0 213/213 @ `f397e53`; interactive live-capture = clean
-   SKIP, documented BLOCKED with the A–D bisect matrix in the Windows runner
-   table above). Remaining: (a) diagnose the adapter-internal frame path (probe
-   v8a: delivered=0 through the real adapter vs 1 frame via the hand-rolled
-   pool-thread handler); (b) the H.264 encoder backend (RW-H-012 — no in-tree
-   H.264 encoder; the seam wraps a factory without a concrete backend); (c) H-FOUND
+   `agent/H-MEDIA/RW-H-011` + the open live-frame defect **FIXED and
+   verified** by RW-H-011b on branch `agent/H-MEDIA/RW-H-011b` @ `191caa2`
+   (interactive hermetic test PASSING: ≥5 live frames @ 320×200, correct
+   window_id routing, clean release; root cause = the test's FakeEncoder
+   never pushed to the sink; full stage tables in the Windows runner table
+   above; branch NOT merged — merge both H-MEDIA branches, then continue).
+   Remaining: (a) the H.264 encoder backend (RW-H-012 — no in-tree
+   H.264 encoder; the seam wraps a factory without a concrete backend); (b) H-FOUND
    app-layer wiring. (The RW-H-010 window registry merged into main @
    `c97bbbf48f3d2aa5bb7de9abc5d41922c8a4174c` on 2026-11-27: merged-revision
    178/178 macOS CTest + Windows runner build_ok + 196/196 @ `c97bbbf`;
