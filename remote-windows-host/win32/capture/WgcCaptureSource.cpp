@@ -136,13 +136,19 @@ void diagLog(const char* stage, const char* window_id, const char* extra,
   std::fflush(stderr);
 }
 
-const char* errorToken(core::CaptureError e) {
+// (Global/anonymous scope: qualify the core namespace — `core` alone is
+// not visible outside remotewindows::win32.)
+const char* errorToken(remotewindows::core::CaptureError e) {
   switch (e) {
-    case core::CaptureError::None: return "none";
-    case core::CaptureError::ConsentRequired: return "consent_required";
-    case core::CaptureError::SourceClosed: return "source_closed";
-    case core::CaptureError::SourceUnavailable: return "source_unavailable";
-    case core::CaptureError::InternalError: return "internal_error";
+    case remotewindows::core::CaptureError::None: return "none";
+    case remotewindows::core::CaptureError::ConsentRequired:
+      return "consent_required";
+    case remotewindows::core::CaptureError::SourceClosed:
+      return "source_closed";
+    case remotewindows::core::CaptureError::SourceUnavailable:
+      return "source_unavailable";
+    case remotewindows::core::CaptureError::InternalError:
+      return "internal_error";
   }
   return "unknown";
 }
@@ -605,7 +611,7 @@ void WgcCaptureSource::surfaceWorker(Surface& s) {
   // Structured stop line: the full per-stage counter table (counts only
   // — the first zero-count stage locates where frame flow stopped).
   {
-    char line[160];
+    char line[256];
     std::snprintf(line, sizeof(line),
                   "err=%s size=%lux%lu arrived=%llu wait_ok=%llu null=%lu "
                   "size_skip=%llu qi_fail=%llu copy_fail=%llu emitted=%llu "
