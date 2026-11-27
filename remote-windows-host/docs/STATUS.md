@@ -1,14 +1,27 @@
 # Windows Host — STATUS
 
-Last updated: 2026-11-27 (RW-H-013 — the loopback-E2E SEGFAULT flake class
-is RESOLVED: root cause identified and fixed at `8989997e2ca0daba155a880fb0ecc9ce96af33ea`
-on branch `agent/H-NET/RW-H-013` (base main @ `c62c5e04d9d87df58ccd22ca1b87bff29099178e`);
-branch pushed, NOT merged to main. Stability gate green at the fix SHA:
-**194/194 macOS CTest** + **5 consecutive Windows runner full runs**
-(each `100% tests passed out of 213` = 212 passed + #213 skipped by
-design) + **5×5 single-member matrix** of the 4 formerly-observed
-members (20/20 green). Root cause + verbatim reproduction evidence in
-the RW-H-013 row of the Windows runner table below.)
+Last updated: 2026-11-27 (RW-H-013 INTEGRATED — main == origin/main @
+`e14516c6efd7861a6e4b9b66ae8ebdfaf31be19d`, fast-forward of branch
+`agent/H-NET/RW-H-013` (2 commits from main @ `c62c5e04d9d87df58ccd22ca1b87bff29099178e`:
+`8989997` fix + `e14516c` docs). Merged-revision verification:
+**194/194 macOS CTest** @ `e14516c` (exit 0, 1.52 s) + **Windows runner
+@ `e14516c`: `100% tests passed out of 213` = 212 passed + #213 skipped
+by design** (`WgcCapture.HermeticConsentGatedPipeline` clean skip in
+session 0), `Total Test time (real) = 18.41 s`, `RWH ctest_exit=0`,
+`RWH status=tests_ok` — single run, deterministic: the loopback-E2E
+SEGFAULT flake class is resolved by construction (no detached signaling
+workers remain). Root cause + pre-merge stability gate evidence in the
+RW-H-013 row of the Windows runner table below.)
+
+Earlier header state (preserved for context — RW-H-013 — the
+loopback-E2E SEGFAULT flake class is RESOLVED: root cause identified and
+fixed at `8989997e2ca0daba155a880fb0ecc9ce96af33ea` on branch
+`agent/H-NET/RW-H-013` (base main @
+`c62c5e04d9d87df58ccd22ca1b87bff29099178e`); branch pushed, NOT merged
+to main. Stability gate green at the fix SHA: **194/194 macOS CTest** +
+**5 consecutive Windows runner full runs** (each `100% tests passed out
+of 213` = 212 passed + #213 skipped by design) + **5×5 single-member
+matrix** of the 4 formerly-observed members (20/20 green).)
 
 Earlier header state (preserved for context — RW-H-011b INTEGRATED — main @
 `afcfd1c355003d04d1751303adb5bc7ffe0a1320`, fast-forward of branch
