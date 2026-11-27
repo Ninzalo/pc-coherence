@@ -1,8 +1,8 @@
 # macOS Client — STATUS
 
 Last updated: 2026-11-27 (RW-C-004 C-INPUT shortcut adaptation stack —
-887/887 Swift checks on `agent/C-INPUT/RW-C-004`; merged main stays at
-`c5320e3` with 369/369 until integration).
+887/887 Swift checks verified on the merged main revision @ `8e812ae9`;
+`agent/C-INPUT/RW-C-004` fast-forward-merged into main 2026-11-27).
 
 ## Implemented and verified
 
@@ -26,8 +26,8 @@ Last updated: 2026-11-27 (RW-C-004 C-INPUT shortcut adaptation stack —
 
 ## Last successful build (this tree, Mac mini)
 
-Commands (worktree `/Users/nnzlgg/pc-coherence-rw-c-004`, branch
-`agent/C-INPUT/RW-C-004`, base `cccd7f5`):
+Commands (merged main @ `8e812ae9`, main checkout, integrated 2026-11-27
+from `agent/C-INPUT/RW-C-004`, base `cccd7f5`):
 ```
 cd remote-windows-client
 swift build
@@ -35,14 +35,14 @@ swift run RemoteWindowsAppTests        # 887 checks, exit 0
 ```
 Result: 2026-11-27, macOS 27.2.1, Swift 6.4.2 (Command Line Tools —
 no full Xcode), SwiftPM. Build clean (exit 0).
-**887/887 test checks PASSED, 0 failures** (exit code 0) — 369
-baseline (merged main @ `c5320e3`: 250 C-CATALOG + 119 C-MEDIA) +
-518 new C-INPUT checks (31 new cases in `ShortcutAdaptationSuite`,
+**887/887 test checks PASSED, 0 failures on the merged main
+revision** (exit code 0) — 369 baseline (250 C-CATALOG + 119 C-MEDIA)
++ 518 new C-INPUT checks (31 new cases in `ShortcutAdaptationSuite`,
 suite count 13 → 14).
 
-Pre-merge main tree (unchanged by this task): 369/369 @ `c5320e3`
-(2026-11-25), launch smoke on the merged main tree: process running
-after 4 s (pid 18926), terminated cleanly.
+Historical pre-merge record: main @ `c5320e3` (2026-11-25) passed
+369/369; launch smoke on that main tree: process running after 4 s
+(pid 18926), terminated cleanly.
 
 ### Environment deviation (recorded per plan rule 2)
 
@@ -76,8 +76,9 @@ after 4 s (pid 18926), terminated cleanly.
   and there is no media-channel auto-reconnect after a §9.6 failure
   (the channel tears down until re-pairing). The v0.1.0 control
   protocol carries no video (by design).
-- Keyboard shortcut adaptation (FR-08) — **implemented and unit-tested
-  on `agent/C-INPUT/RW-C-004` (RW-C-004, not yet merged)**. Still NOT
+- Keyboard shortcut adaptation (FR-08) — **implemented, unit-tested
+  and merged to main @ `8e812ae9` (RW-C-004; 518/518 new checks
+  passing on the merged main revision)**. Still NOT
   RUN: live input-pipeline integration (the service is a pure seam;
   applying it while a remote window is the active input target and
   emitting `input_event` frames requires C-WINDOWS + H-INPUT per the
@@ -115,11 +116,11 @@ changed to `192.168.100.139` in the host-address field for the test
 
 ## Next tasks
 
-1. Merge `agent/C-INPUT/RW-C-004` → main (orchestrator), then the
-   input-pipeline stage (C-WINDOWS window tracking + H-INPUT): apply
+1. Input-pipeline stage (C-WINDOWS window tracking + H-INPUT): apply
    `ShortcutAdaptationService.translate` only while a remote window is
    the active input target and emit `.adapted` sequences as
-   `input_event` key frames (the documented seam; FR-08 8.1 gate).
+   `input_event` key frames (the documented seam; FR-08 8.1 gate;
+   `agent/C-INPUT/RW-C-004` merged to main 2026-11-27 @ `8e812ae9`).
 2. C-MEDIA follow-ups (post-integration): pixel-output verification of
    the decode/render path when a display is available (NOT RUN
    headless), and a media-channel reconnect policy after a §9.6 failure
