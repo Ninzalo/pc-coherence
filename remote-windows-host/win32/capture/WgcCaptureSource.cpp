@@ -84,7 +84,6 @@
 namespace {
 
 using winrt::Windows::Foundation::AsyncStatus;
-using winrt::Windows::Foundation::IInspectable;
 using winrt::Windows::Graphics::Capture::Direct3D11CaptureFrame;
 using winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool;
 using winrt::Windows::Graphics::Capture::GraphicsCaptureAccess;
@@ -310,7 +309,8 @@ core::CaptureError WgcCaptureSource::startOnThread(Surface& s) {
     //    is only ever taken by start/stop/worker threads).
     s.frame_token = s.pool.FrameArrived([this, &s](
                                             const Direct3D11CaptureFramePool& pool,
-                                            IInspectable const&) {
+                                            winrt::Windows::Foundation::
+                                                IInspectable const&) {
       if (s.stopping.load()) return;
       Direct3D11CaptureFrame frame = nullptr;
       try {
@@ -353,7 +353,10 @@ core::CaptureError WgcCaptureSource::startOnThread(Surface& s) {
         // IDirect3DSurface (GetBuffer) is gone from the SDK. The
         // documented WGC pixel path: QI the surface for
         // IDirect3DDxgiInterfaceAccess, then GetInterface
-        // (IID_ID3D11Texture2D).
+        // (IID_ID3D11Texture2D). get_abi yields the raw COM object;
+        // QI through the raw COM IInspectable (the um interop header
+        // pulls in the global ::IInspectable — the projected winrt one
+        // is a different, non-raw type).
         auto* surface_inspectable =
             static_cast<IInspectable*>(winrt::get_abi(dsurface));
         ::Windows::Graphics::DirectX::Direct3D11::
