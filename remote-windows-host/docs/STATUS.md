@@ -1,7 +1,11 @@
 # Windows Host — STATUS
 
-Last updated: 2026-11-27 (RW-H-010 COMPLETE on branch
-`agent/H-WINDOWS/RW-H-010` @ `6ea4591`, not yet merged to main: Stage 1
+Last updated: 2026-11-27 (RW-H-010 INTEGRATED — merged into main @
+`c97bbbf48f3d2aa5bb7de9abc5d41922c8a4174c` (fast-forward from
+`8147dcd`); merged-revision verification: **178/178 macOS CTest** +
+**Windows runner @ `c97bbbf`: build exit 0 (`RWH status=build_ok`) +
+196/196 unit tests (`RWH status=tests_ok`)**; pre-merge branch state
+`agent/H-WINDOWS/RW-H-010` @ `6ea4591` (code-identical tip): Stage 1
 portable window-registry core — live window registry with UUID
 window_ids, owner/parent relationship graph, cross-PID auxiliary
 correlation (ADR-0006), modality inference, snapshot reconciliation —
@@ -47,8 +51,10 @@ cmake -S remote-windows-host -B remote-windows-host/build
 cmake --build remote-windows-host/build -j
 ctest --test-dir remote-windows-host/build --output-on-failure
 ```
-Result: 2026-11-27 (RW-H-010, final branch state `6ea4591`), macOS
-27.2.1, CMake 4.5.1, Ninja 1.13.2, clang (Apple). Build clean (exit 0).
+Result: 2026-11-27 (RW-H-010, final branch state `6ea4591`; re-verified
+on merged main @ `c97bbbf48f3d2aa5bb7de9abc5d41922c8a4174c` — same
+commands, build exit 0, 178/178), macOS 27.2.1, CMake 4.5.1, Ninja
+1.13.2, clang (Apple). Build clean (exit 0).
 **178/178 tests PASSED** (previous 145 + 33 new `window_registry_test`
 cases, 0 failed).
 The 33 new cases: WindowRegistryLifecycle (11: full-field announce with
@@ -344,13 +350,11 @@ Windows runner (DESKTOP-PC), 2026-11-24:
    `remote-windows-client/docs/agent-tasks/RW-C-004.md` (written,
    committed `7bb5687`; input-pipeline integration is scoped out of the
    packet — it needs C-WINDOWS/H-INPUT).
-2. H-WINDOWS (Host): window registry — RW-H-010 COMPLETE on branch
-   `agent/H-WINDOWS/RW-H-010` @ `6ea4591` (pushed, not merged): Stage 1
-   portable core 178/178 macOS; Stage 2 Win32 WinEvents adapter +
-   hermetic integration test, Windows runner 196/196 @ `6ea4591`
-   (evidence in the Windows runner table above). Integration/merge to
-   main is the next step. H-MEDIA: Win32 WGC capture (next host track
-   after the registry lands).
+2. H-MEDIA (Host): Win32 WGC capture — next host track (the RW-H-010
+   window registry merged into main @ `c97bbbf48f3d2aa5bb7de9abc5d41922c8a4174c`
+   on 2026-11-27: merged-revision 178/178 macOS CTest + Windows runner
+   build_ok + 196/196 @ `c97bbbf`; pre-merge branch evidence @ `6ea4591`
+   in the Windows runner table above).
 
 Done:
 
