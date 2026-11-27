@@ -16,23 +16,24 @@
 //     scans are idempotent (no duplicate announce);
 //   * title change.
 //
-// SESSION CONTEXT (verified on the runner 2026-11-27, diag probe
-// C:\rwh\diag_vis.cpp): in a HEADLESS session (session 0, sshd) a
-// top-level window can NEVER transition to the visible state —
-// IsWindowVisible() stays FALSE even with WS_VISIBLE, and
-// ShowWindow(SW_SHOWNORMAL) fails with ERROR_CANCELLED (1400);
-// EnableWindow likewise fails and SW_MINIMIZE never registers. The
-// suite therefore probes the context once (TopLevelWindowsCanBeShown)
-// and asserts per context:
+// SESSION CONTEXT (verified on the runner 2026-11-27, diag probes
+// C:\rwh\diag_vis.cpp / diag_en.cpp): in a HEADLESS session (session
+// 0, sshd) a top-level window can NEVER transition to the visible
+// state — IsWindowVisible() stays FALSE even with WS_VISIBLE, and
+// ShowWindow(SW_SHOWNORMAL) fails with ERROR_CANCELLED (1400).
+// EnableWindow(FALSE) likewise REPORTS failure but still applies the
+// state change (a STATECHANGE is observable). SW_MINIMIZE never
+// registers for an unshown window. The suite therefore probes the
+// context once (TopLevelWindowsCanBeShown) and asserts per context:
 //   * interactive session: full visibility assertions (visible flag,
-//     z-order ranks, EnableWindow-driven AppModal transition,
-//     minimize/restore);
-//   * headless session: everything that does not depend on visibility
-//     (creation/announce/geometry/DPI/owner/session/role/WindowModal/
-//     destroy/scan/title), with the visibility-dependent checks
-//     recorded as expected-skip (NOT RUN in that context), and the
-//     reported visible==false / z_order_rank==-1 asserted as the true
-//     adapter output for the context.
+//     z-order ranks, minimize/restore);
+//   * headless session: everything else (creation/announce/geometry/
+//     DPI/owner/session/role/WindowModal AND the AppModal transition
+//     via EnableWindow/STATECHANGE, destroy, scan, title), with the
+//     visibility-dependent checks (visible flag, z-order ranks,
+//     minimize/restore) recorded as expected-skip (NOT RUN in that
+//     context) and the reported visible==false / z_order_rank==-1
+//     asserted as the true adapter output for the context.
 //
 // WINDOWS ONLY: the test exercises real windows and WinEvents —
 // meaningless (and uncompilable) on macOS. Recorded as NOT RUN on
@@ -371,26 +372,25 @@ TEST_F(Win32WindowsRegistryTest, DisablingOwnerTransitionsDialogToAppModal) {
   ASSERT_TRUE(drec0.has_value());
   ASSERT_EQ(drec0->modality, core::WindowModality::WindowModal);
 
-  if (!visible_ctx_) {
-    // Headless session: EnableWindow on an unshown window fails (OS
-    // constraint, verified on the runner), so the AppModal transition
-    // is NOT RUN here. The modal state must stay WindowModal unchanged.
+  if (visible_ctx_) {
+    EXPECT_TRUE(EnableWindow(main, FALSE));
+  } else {
+    // Headless session: EnableWindow(FALSE) REPORTS failure
+    // (ERROR_CANCELLED) but still applies the state change (verified
+    // on the runner, diag probe 2026-11-27) — so the STATECHANGE /
+    // scan update still drives the AppModal transition below.
     EXPECT_FALSE(EnableWindow(main, FALSE));
-    Pump();
-    Sleep(300);
-    auto r = registry_.findByHwnd(win32::HwndKey(dialog));
-    ASSERT_TRUE(r.has_value());
-    EXPECT_EQ(r->modality, core::WindowModality::WindowModal);
-    return;
   }
-
-  EXPECT_TRUE(EnableWindow(main, FALSE));
   ASSERT_TRUE(WaitUntil([&] {
     auto r = registry_.findByHwnd(win32::HwndKey(dialog));
     return r && r->modality == core::WindowModality::AppModal;
   }));
 
-  EXPECT_TRUE(EnableWindow(main, TRUE));
+  if (visible_ctx_) {
+    EXPECT_TRUE(EnableWindow(main, TRUE));
+  } else {
+    (void)EnableWindow(main, TRUE);  // headless: return value not asserted
+  }
   ASSERT_TRUE(WaitUntil([&] {
     auto r = registry_.findByHwnd(win32::HwndKey(dialog));
     return r && r->modality == core::WindowModality::WindowModal;
