@@ -1,6 +1,6 @@
 // RW-H-012 (H-MEDIA): in-box Media Foundation H.264 encoder backend.
 //
-// Design notes (measured against SDK 10.0.26100 on the dev PC — see the
+// Design notes (measured against SDK 10.0.26100 on the dev PC - see the
 // header and docs/STATUS.md):
 //  * Candidate selection BY BEHAVIOR: start() probes each in-box H.264
 //    encoder MFT (activate -> unlock -> negotiate -> bounded 2-frame
@@ -26,7 +26,7 @@
 //    calling thread; the only foreign entry point is the MFT's async
 //    callback, which only touches a critical-section-guarded slot.
 //
-// Win32/MSVC only — NOT RUN on macOS by design (AGENTS.md).
+// Win32/MSVC only - NOT RUN on macOS by design (AGENTS.md).
 
 #include "win32/video/h264_encoder_mf.hpp"
 
@@ -58,6 +58,11 @@ using core::CapturedFrame;
 using core::EncodedFrame;
 
 constexpr HRESULT kMfNotAccepting = static_cast<HRESULT>(0xC00D36B5);
+
+// Internal sentinel: "bounded pump timed out, no output sample". NOT an
+// MFT HRESULT (MF_E_NOTFOUND was removed from mferror.h in SDK 26100;
+// MF_E_NOT_FOUND 0xC00D36D5 is a different, unrelated status).
+constexpr HRESULT kNoSample = static_cast<HRESULT>(0x00E00001);
 
 DWORD now_ms() {
   return static_cast<DWORD>(
@@ -267,7 +272,7 @@ HRESULT pull_one_output(IMFTransform* t, IMFMediaEventGenerator* gen,
     ResetEvent(sink->have_event());
     if (FAILED(gen->BeginGetEvent(sink, nullptr))) break;
   }
-  return MF_E_NOTFOUND;  // bounded timeout, no sample
+  return kNoSample;  // bounded timeout, no sample
 }
 
 }  // namespace
@@ -539,7 +544,8 @@ bool MfH264Encoder::tryCandidate(IMFActivate* act, const std::string& name,
   {
     D3D_FEATURE_LEVEL fl[2] = {D3D_FEATURE_LEVEL_11_1,
                                D3D_FEATURE_LEVEL_11_0};
-    D3D_FEATURE_LEVEL used = D3D_FEATURE_LEVEL_UNKNOWN;
+    D3D_FEATURE_LEVEL used = D3D_FEATURE_LEVEL_11_0;  // out-param; SDK 26100
+    // removed the D3D_FEATURE_LEVEL_UNKNOWN enumerator
     ID3D11DeviceContext* ctx = nullptr;
     if (SUCCEEDED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE,
                                     nullptr, 0, fl, 2, D3D11_SDK_VERSION,
@@ -558,7 +564,7 @@ bool MfH264Encoder::tryCandidate(IMFActivate* act, const std::string& name,
   }
   if (mgr) {
     HRESULT hs = t->ProcessMessage(MFT_MESSAGE_SET_D3D_MANAGER,
-                                   static_cast<ULONG_PTR>(mgr));
+                                   reinterpret_cast<ULONG_PTR>(mgr));
     if (FAILED(hs)) {
       mgr->Release();
       dev->Release();
@@ -756,7 +762,7 @@ bool MfH264Encoder::tryCandidate(IMFActivate* act, const std::string& name,
     while (!got && now_ms() < deadline) {
       IMFSample* o = nullptr;
       HRESULT hr = pull_one_output(t, gen, sink, now_ms() + 100, &o);
-      if (hr == MF_E_NOTFOUND) break;  // bounded timeout
+      if (hr == kNoSample) break;  // bounded timeout
       if (FAILED(hr)) {
         sink->Release();
         fail(detail, "negotiate_failed", hr);

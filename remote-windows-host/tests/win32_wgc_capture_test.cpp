@@ -486,7 +486,7 @@ class LiveH264Sink final : public core::IEncodedFrameConsumer {
   std::string first_error_;
 };
 
-class LiveMfFactory final : public win32::MfH264EncoderFactory {
+class LiveMfFactory final : public core::IVideoEncoderFactory {
  public:
   std::unique_ptr<core::IVideoEncoder> create(
       const std::string& window_id, core::IEncodedFrameConsumer& sink) override {

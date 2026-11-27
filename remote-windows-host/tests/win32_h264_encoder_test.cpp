@@ -150,7 +150,7 @@ core::CapturedFrame makeFrame(uint32_t w, uint32_t h, uint64_t seq) {
 bool tryStart(std::unique_ptr<win32::MfH264Encoder>& enc,
               RecordingSink& sink, uint32_t w, uint32_t h, uint32_t fps,
               std::string& detail) {
-  *detail = "";
+  detail.clear();
   enc = std::make_unique<win32::MfH264Encoder>("rwh-h264-test", sink);
   if (!enc->start(w, h, fps)) {
     const auto cands = win32::MfH264Encoder::surveyCandidates();
@@ -162,7 +162,7 @@ bool tryStart(std::unique_ptr<win32::MfH264Encoder>& enc,
     }
     return false;
   }
-  *detail = enc->selectedEncoder();
+  detail = enc->selectedEncoder();
   return true;
 }
 

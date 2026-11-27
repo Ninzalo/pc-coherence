@@ -9,6 +9,26 @@
 #include "core/capture_encoder.hpp"
 #include "core/capture_source.hpp"
 
+// Win32-only header. The include order below is MEASURED (SDK
+// 10.0.26100, MSVC 14.51, c++20) and probe-verified in the RW-H-012
+// session; do not reorder it: the MF/COM includes stay at global
+// scope (never inside a namespace), and the IMF* forward decls stay
+// before those includes. Either reordering breaks a later system
+// header during the first real translation unit that uses it.
+struct IMFTransform;
+struct IMFMediaEventGenerator;
+struct IMFAttributes;
+struct IMFDXGIDeviceManager;
+struct ID3D11Device;
+struct IMFMediaType;
+struct IMFActivate;
+struct IMFSample;
+struct IMFAsyncResult;
+struct IMFMediaEvent;
+
+#include <windows.h>  // HANDLE/CRITICAL_SECTION/DWORD/HRESULT
+#include <mfapi.h>    // IMFAsyncCallback (SDK 26100 vtable) + MF base
+
 // RW-H-012 (H-MEDIA): in-box Media Foundation H.264 encoder backend for the
 // portable core::IVideoEncoder seam (core/capture_encoder.hpp), Win32-only.
 //
@@ -44,26 +64,13 @@
 // thread. All MFT calls run on the calling thread (the per-session
 // capture worker). The only foreign entry point is the MFT's async
 // callback (EventSink::Invoke, on the MFT's internal thread), which only
-// touches a critical-section-guarded slot — the same pattern as the probe
-// phase. Lifetime: the MFT holds a COM ref on the callback while it
+// touches a critical-section-guarded slot (same pattern as the probe
+// phase). Lifetime: the MFT holds a COM ref on the callback while it
 // exists; stop() performs EOF + bounded drain and then releases the MFT,
 // after which no callback can fire; the callback self-deletes at
 // refcount 0.
+
 namespace remotewindows::win32 {
-
-struct IMFTransform;
-struct IMFMediaEventGenerator;
-struct IMFAttributes;
-struct IMFDXGIDeviceManager;
-struct ID3D11Device;
-struct IMFMediaType;
-struct IMFActivate;
-struct IMFSample;
-struct IMFAsyncResult;
-struct IMFMediaEvent;
-
-#include <windows.h>  // Win32-only header: HANDLE/CRITICAL_SECTION/DWORD
-#include <mfapi.h>    // IMFAsyncCallback (SDK 26100 vtable) + MF base
 
 // Async-callback sink (SDK 26100 IMFAsyncCallback: GetParameters +
 // Invoke, mfobjects.h). The ONLY entry point that runs on the MFT's
