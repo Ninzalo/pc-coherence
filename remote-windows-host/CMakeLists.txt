@@ -97,8 +97,12 @@ endif()
 # there is no macOS port of this target (NOT RUN on macOS by design).
 if(WIN32)
   add_library(rwh_win32_capture STATIC win32/capture/WgcCaptureSource.cpp)
+  # dxguid: SDK 10.0.26100.0 moved DXGI IIDs out of the headers —
+  # IID_IDXGIDevice (used for the raw QI into the WGC device's DXGI
+  # view) is now provided only by dxguid.lib (verified with dumpbin:
+  # absent from dxgi.lib and d3d11.lib).
   target_link_libraries(rwh_win32_capture
-                        PUBLIC rwh_core d3d11 dwmapi windowsapp)
+                        PUBLIC rwh_core d3d11 dwmapi windowsapp dxguid)
 endif()
 
 # Windows Host application shell (H-FOUND, plan section 4.1). Console
