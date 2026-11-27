@@ -98,7 +98,6 @@
 
 namespace {
 
-using winrt::Windows::Foundation::AsyncStatus;
 using winrt::Windows::Graphics::Capture::Direct3D11CaptureFrame;
 using winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool;
 using winrt::Windows::Graphics::Capture::GraphicsCaptureAccess;
@@ -223,7 +222,14 @@ core::CaptureError WgcCaptureSource::consentGate() {
         std::chrono::steady_clock::now() + kConsentDeadline;
     bool completed = false;
     for (;;) {
-      completed = op.Status() == AsyncStatus::Completed;
+      // Fully qualified: the UMP include chain
+      // (windows.graphics.capture.interop.h -> windows.ui.composition.h)
+      // pulls in the 26100 legacy winrt projection headers
+      // (winrt/AsyncInfo.h), which using-declare ABI::Windows::Foundation
+      // ::AsyncStatus at global scope — a file-scope using declaration of
+      // the winrt type made the unqualified name ambiguous (C2872).
+      completed = op.Status() ==
+                  winrt::Windows::Foundation::AsyncStatus::Completed;
       if (completed || std::chrono::steady_clock::now() >= deadline)
         break;
       std::this_thread::sleep_for(
