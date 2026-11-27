@@ -459,9 +459,22 @@ std::string WindowRegistry::correlateWithSession(WindowRecord& rec) {
   // (e.g. a visible pid-set window) arrived first — the spec defines
   // the anchor as the primary pid's FIRST top-level, period; the launch
   // flow may still override with setSessionAnchor().
+  // The anchor must be a REAL surface: a non-zero client area. On
+  // interactive Windows desktops the OS creates transient invisible
+  // helper windows in the app's own process (zero client area, often
+  // owned by the not-yet-completed main window) whose CREATE events can
+  // arrive BEFORE the main window's — without the geometry requirement
+  // such a helper would steal the anchor (role Main, session) and the
+  // real main window would stay Unknown/unassociated (probe-verified on
+  // the runner 2026-11-27). A main window created hidden but sized still
+  // anchors. A main observed first with no geometry is NOT anchored by
+  // the heuristic (correlation runs at first sight / owner-edge
+  // changes only) — the launch flow's setSessionAnchor() is the
+  // deterministic path for that edge case.
   for (auto& [sid, s] : sessions_) {
     if (rec.pid == s.primary_pid && !s.anchor_window_id &&
-        rec.surface_kind == WindowSurfaceKind::IndependentTopLevel) {
+        rec.surface_kind == WindowSurfaceKind::IndependentTopLevel &&
+        rec.width_px > 0 && rec.height_px > 0) {
       rec.app_session_id = sid;
       s.anchor_window_id = rec.window_id;
       s.member_hwnds.push_back(rec.hwnd);

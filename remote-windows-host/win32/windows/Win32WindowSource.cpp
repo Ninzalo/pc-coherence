@@ -10,6 +10,7 @@
 // core header; keep that order stable.
 #include "app/Win32Env.hpp"
 
+#include <chrono>
 #include <cstdio>
 
 namespace remotewindows::win32 {
@@ -159,11 +160,12 @@ struct Win32WindowSource::Impl {
   Options opts;
   WindowSourceSink* sink = nullptr;
   std::thread thread;
+  std::thread scan_thread;
   std::atomic<bool> running{false};
   std::atomic<bool> ready{false};
+  std::atomic<bool> scan_stop{false};
   std::atomic<DWORD> thread_id{0};
 
-  static constexpr UINT_PTR kScanTimerId = 0x1;
   static constexpr UINT kScanNowMsg = static_cast<UINT>(WM_APP + 0x10);
   static Impl* active;  // at most one instance per process
 
@@ -200,13 +202,28 @@ struct Win32WindowSource::Impl {
         ev.info.y = full.y;
         ev.info.width_px = full.width_px;
         ev.info.height_px = full.height_px;
+        // On this OS build minimize/restore shows up as a location
+        // change, not a STATECHANGE — refresh the state too so the
+        // registry's minimized/maximized flags track it (probe
+        // 2026-11-27).
+        ev.info.has_state = true;
+        ev.info.enabled = full.enabled;
+        ev.info.minimized = full.minimized;
+        ev.info.maximized = full.maximized;
         break;
       }
       case EVENT_OBJECT_REORDER: {
         ev.kind = WinEventKind::LocationChange;
         ev.info = MakeHwndInfo(hwnd);
+        const NativeWindowInfo full = MakeFullInfo(hwnd);
         ev.info.has_z_order = true;
-        ev.info.z_order_rank = ZOrderRank(hwnd);
+        ev.info.z_order_rank = full.z_order_rank;
+        // Same state-refresh rationale as LOCATIONCHANGE (the reorder
+        // is part of the minimize/restore footprint on this build).
+        ev.info.has_state = true;
+        ev.info.enabled = full.enabled;
+        ev.info.minimized = full.minimized;
+        ev.info.maximized = full.maximized;
         break;
       }
       case EVENT_OBJECT_SHOW:
@@ -281,16 +298,16 @@ struct Win32WindowSource::Impl {
         0, 0, WINEVENT_OUTOFCONTEXT);
     if (hook) {
       ready = true;
-      // Periodic reconciliation scan on this (hook) thread.
-      SetTimer(nullptr, kScanTimerId, opts.scan_interval_ms, nullptr);
+      // The periodic reconciliation cadence lives on a dedicated
+      // thread that posts kScanNowMsg here (a NULL-window SetTimer on
+      // this thread never ticks on the runner's Win11 build — probe
+      // 2026-11-27, see header).
       if (opts.initial_scan) RunScan();
       MSG msg;
       for (;;) {
         const BOOL got = GetMessageW(&msg, nullptr, 0, 0);
         if (got <= 0) break;  // WM_QUIT (0) or error (-1)
-        if (msg.message == WM_TIMER && msg.wParam == kScanTimerId) {
-          RunScan();
-        } else if (msg.message == kScanNowMsg) {
+        if (msg.message == kScanNowMsg) {
           RunScan();
         } else {
           TranslateMessage(&msg);
@@ -302,6 +319,23 @@ struct Win32WindowSource::Impl {
     ready = false;
     running = false;
     if (active == this) active = nullptr;
+  }
+
+  // Dedicated cadence thread: every scan_interval_ms, ask the hook
+  // thread to run a reconciliation scan. All scanning itself stays on
+  // the hook thread (events and scans are serialized there).
+  void RunScanCadence() {
+    // Wait for the hook thread to register its id.
+    for (int i = 0; i < 100 && thread_id.load() == 0 && !scan_stop.load();
+         ++i)
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    while (!scan_stop.load()) {
+      std::this_thread::sleep_for(
+          std::chrono::milliseconds(opts.scan_interval_ms));
+      if (scan_stop.load()) break;
+      const DWORD tid = thread_id.load();
+      if (tid != 0) PostThreadMessageW(tid, kScanNowMsg, 0, 0);
+    }
   }
 };
 
@@ -317,12 +351,21 @@ bool Win32WindowSource::start(WindowSourceSink& sink) {
     return false;  // one per process
   Impl::active = impl_.get();
   impl_->sink = &sink;
+  impl_->scan_stop = false;
   try {
     impl_->thread = std::thread([this] {
       impl_->thread_id = static_cast<DWORD>(GetCurrentThreadId());
       impl_->Run();
     });
+    impl_->scan_thread = std::thread([this] { impl_->RunScanCadence(); });
   } catch (...) {
+    impl_->scan_stop = true;
+    if (impl_->scan_thread.joinable()) impl_->scan_thread.join();
+    if (impl_->thread.joinable()) {
+      const DWORD tid = impl_->thread_id.load();
+      if (tid != 0) PostThreadMessageW(tid, WM_QUIT, 0, 0);
+      impl_->thread.join();
+    }
     if (Impl::active == impl_.get()) Impl::active = nullptr;
     impl_->sink = nullptr;
     return false;
@@ -331,11 +374,15 @@ bool Win32WindowSource::start(WindowSourceSink& sink) {
 }
 
 void Win32WindowSource::stop() {
-  if (!impl_ || !impl_->thread.joinable()) {
+  // Stop the cadence thread first (it posts to the hook thread's
+  // queue), then quit the hook thread.
+  impl_->scan_stop = true;
+  if (impl_->scan_thread.joinable()) impl_->scan_thread.join();
+  if (!impl_->thread.joinable()) {
     if (Impl::active == impl_.get()) Impl::active = nullptr;
     return;
   }
-  const DWORD tid = impl_->thread_id;
+  const DWORD tid = impl_->thread_id.load();
   if (tid != 0) PostThreadMessageW(tid, WM_QUIT, 0, 0);
   impl_->thread.join();
   impl_->sink = nullptr;

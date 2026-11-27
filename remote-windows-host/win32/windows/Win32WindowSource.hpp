@@ -89,13 +89,23 @@ class WindowSourceSink {
 // surface (core::classifySurface) and the later capture layer must
 // not open a duplicate stream for them.
 //
-// Reconciliation: a SetTimer on the hook thread runs an EnumWindows
-// snapshot every Options::scan_interval_ms (default 2000 — the
+// Reconciliation: a dedicated cadence thread posts kScanNowMsg to the
+// hook thread every Options::scan_interval_ms (default 2000 — the
 // documented cadence), and requestScan() forces an immediate pass.
-// The scan is current truth, events are history: the sink captures
-// the pre-scan sequence (onScanStarted) and passes it to
-// WindowRegistry::reconcile, which keeps event-fresh fields and
-// materializes/removes everything else.
+// (NOT a NULL-window SetTimer: on this runner's Win11 build a
+// SetTimer(NULL,...) on the hook thread never ticks — probe-verified
+// 2026-11-27 in BOTH the headless and the interactive session; the
+// probe output is referenced in docs/STATUS.md.) The scan is current
+// truth, events are history: the sink captures the pre-scan sequence
+// (onScanStarted) and passes it to WindowRegistry::reconcile, which
+// keeps event-fresh fields and materializes/removes everything else.
+//
+// Note (probe-verified 2026-11-27, Win11 24H2 build 26300): on this
+// build minimize/restore does NOT emit EVENT_OBJECT_STATECHANGE for
+// the window object — the observable footprint is LOCATIONCHANGE /
+// REORDER. The adapter therefore refreshes the enabled/minimized/
+// maximized state on those events as well, so the registry's
+// minimize tracking does not depend on STATECHANGE.
 //
 // At most ONE instance may run per process (the WinEvent callback
 // is process-global). start() returns false otherwise. The sink

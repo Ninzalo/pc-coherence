@@ -720,6 +720,45 @@ TEST(AppSession, FirstPrimaryPidTopLevelBecomesAnchor) {
   EXPECT_EQ(reg.find(idn).value().app_session_id, "");
 }
 
+TEST(AppSession, ZeroGeometryHelperDoesNotStealAnchor) {
+  // Regression (runner probe 2026-11-27, interactive session): the OS
+  // creates transient invisible helper windows in the app's own
+  // process (zero client area, owned by the not-yet-complete main
+  // window) whose CREATE events can arrive BEFORE the main window's.
+  // Such a helper must not steal the session anchor; the real main
+  // (non-zero client area) gets it.
+  core::WindowRegistry reg;
+  reg.registerSession("sess", 100);
+
+  // Helper first: same pid, NO geometry, invisible, owned by the
+  // main window (not yet observed). It may correlate via the WEAK
+  // evidence path (pid in the session's pid set + owner edge set —
+  // ADR-0006 rule 3), but it must NOT become the anchor.
+  auto helper = makeInfo("0xH", 100);
+  helper.has_geometry = false;
+  helper.width_px = 0;
+  helper.height_px = 0;
+  helper.visible = false;
+  helper.owner_hwnd = "0xM";
+  reg.applyEvent(ev(core::WinEventKind::Create, helper));
+  const auto h_before = reg.findByHwnd("0xH").value();
+  EXPECT_EQ(h_before.app_session_id, "sess");  // weak evidence
+  EXPECT_NE(h_before.role, core::WindowRole::Main);  // NOT the anchor
+
+  // The real main window, with a real client area: it anchors. (Its
+  // CREATE also re-resolves the helper's owner edge -> a second
+  // notification, hence no create() helper here.)
+  reg.applyEvent(ev(core::WinEventKind::Create, makeInfo("0xM", 100)));
+  const auto main = reg.findByHwnd("0xM").value();
+  EXPECT_EQ(main.app_session_id, "sess");
+  EXPECT_EQ(main.role, core::WindowRole::Main);
+
+  // The helper remains a non-anchor member with a stable identity.
+  const auto h_after = reg.findByHwnd("0xH").value();
+  EXPECT_EQ(h_after.window_id, h_before.window_id);
+  EXPECT_NE(h_after.role, core::WindowRole::Main);
+}
+
 TEST(AppSession, AssociateWindowExplicit) {
   core::WindowRegistry reg;
   reg.registerSession("sess", 100);
