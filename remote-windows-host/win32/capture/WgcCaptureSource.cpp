@@ -264,13 +264,14 @@ core::CaptureError WgcCaptureSource::startOnThread(Surface& s) {
         item_factory = nullptr;
       }
       void* raw_item = nullptr;
-      const HRESULT chr = item_factory
-          ? item_factory->CreateForWindow(
-                s.hwnd,
-                winrt::guid_of<
-                    winrt::Windows::Graphics::Capture::GraphicsCaptureItem>(),
-                &raw_item)
-          : winrt::hresult(E_NOINTERFACE);
+      HRESULT chr = E_NOINTERFACE;
+      if (item_factory) {
+        chr = item_factory->CreateForWindow(
+            s.hwnd,
+            winrt::guid_of<
+                winrt::Windows::Graphics::Capture::GraphicsCaptureItem>(),
+            &raw_item);
+      }
       if (SUCCEEDED(chr) && raw_item) {
         item =
             GraphicsCaptureItem(raw_item, winrt::take_ownership_from_abi);
