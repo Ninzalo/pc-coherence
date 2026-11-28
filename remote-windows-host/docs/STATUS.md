@@ -1,7 +1,19 @@
 # Windows Host — STATUS
 
-Last updated: 2026-11-27 (RW-H-013 INTEGRATED — main == origin/main @
-`e14516c6efd7861a6e4b9b66ae8ebdfaf31be19d`, fast-forward of branch
+Last updated: 2026-11-28 (RW-H-012 H.264 encoder backend — branch
+`agent/H-MEDIA/RW-H-012`, base `6ae8123`, final code tip `61ceaa0` +
+docs; the caller-driven MFT refactor is IMPLEMENTED, MSVC `build_ok`,
+and the session-0 runner is green (213 passed + 6 honest session-0
+skips, 0 failed), but the interactive PRODUCTION encode path crashes
+`0xc0000005` on this PC — NOT verified-working; the throwaway candidate
+smoke DOES work (selects "Microsoft AVC DX12 Encoder"). Full detail,
+the measured encoder envelope, and the HONEST encoder correction
+(NVIDIA 30/30 uncorroborated / D3D11 dead / QSV dead / MS-AVC DX12 =
+the only working path) are in the RW-H-012 section below).
+
+Earlier header state (preserved for context — RW-H-013 INTEGRATED —
+main == origin/main @ `e14516c6efd7861a6e4b9b66ae8ebdfaf31be19d`,
+fast-forward of branch
 `agent/H-NET/RW-H-013` (2 commits from main @ `c62c5e04d9d87df58ccd22ca1b87bff29099178e`:
 `8989997` fix + `e14516c` docs). Merged-revision verification:
 **194/194 macOS CTest** @ `e14516c` (exit 0, 1.52 s) + **Windows runner
@@ -151,6 +163,185 @@ their prior counts. Prior build record: RW-H-010 final branch state
 | RW-H-011b — WGC frame-path diagnosis + fix (2026-11-27; branch `agent/H-MEDIA/RW-H-011b`, base main @ `f51f2e4`, final SHA `191caa26d90db2b737b93f3ee3d0d46b73dc5a86`; NOT merged) | `prepare <branch-sha>` (fetch+checkout) + `build` + `unit-tests` (session 0) + INTERACTIVE schtasks runs of the hermetic test with `--wgc-diag` (user session) | **DEFECT FIXED + VERIFIED.** Commits: `de86794` (permanent per-stage counters `frames_arrived`/`frames_wait_returned`/`null_frames`/`size_skips`/`qi_failures`/`copy_failures`/`emitted`/`handler_errors` in the adapter + `frameStats()` + structured start/stop/error log lines (counts/sizes/ids only) + `--wgc-diag` stage-table mode; macOS 194/194 @ that SHA); `76038e1` (MSVC C2653: qualify `remotewindows::core::CaptureError` in the global-scope `errorToken()` helper); `7dc6d4d` (MSVC C2440: SDK 26100 `ID3D11DeviceContext::CopyResource` is void-return + throws → try/catch, skip-and-count); `191caa2` (ROOT-CAUSE FIX — the hermetic test's `FakeEncoder` violated the `IVideoEncoder` seam contract: it only counted frames internally and never called the sink given at construction, so `frames_delivered`/`sink_count` were structurally 0 regardless of adapter health; the fake now holds the sink ref and pushes one stub `EncodedFrame` per source frame, mirroring the portable pipeline test's fake; also asserts `frames_received >= 5` at the gate so live flow is pinned independently of the encoder double). **Diagnostic stage table** (interactive, `7dc6d4d`, 15 s, animated 320×200 window, verbatim): adapter `frames_arrived=58 frames_wait_returned=58 null_frames=0 size_skips=0 qi_failures=0 copy_failures=0 emitted=58 handler_errors=0`; manager `frames_received=58 frames_delivered=0 frames_dropped=0 queue_depth=0 queue_max_depth=8 error_count=0 surface_starts=1 keyframe_requests=1`; `fake_encoder encoded=58 keyframes=1 sink_count=0` → first zero-count stage = **encoder→sink** (inside the test double — NOT the adapter or manager; the real WGC adapter and manager were healthy: 58/58 live frames). **Final verification @ `191caa2`** (interactive, verbatim): `[wgc] start window_id=6f9c3a2e-1b4d-4c7a-9e2f-8a3d5b7c9e01 err=none size=320x200`; stage table `frames_arrived=5 frames_wait_returned=5 null_frames=0 size_skips=0 qi_failures=0 copy_failures=0 emitted=5 handler_errors=0`; manager `frames_received=5 frames_delivered=5 frames_dropped=0 queue_depth=0 queue_max_depth=8 error_count=0 surface_starts=1 keyframe_requests=1`; `fake_encoder encoded=5 keyframes=1 sink_count=5`; `[wgc] stop … err=none size=320x200 arrived=5 wait_ok=5 null=0 size_skip=0 qi_fail=0 copy_fail=0 emitted=5 handler_err=0`; **`[       OK ] WgcCapture.HermeticConsentGatedPipeline (1292 ms)` / `[  PASSED  ] 1 test.`** — ≥5 live frames @ exact 320×200, correct window_id routing (`sink.countFor(kTestId) == frames_delivered == 5`), clean release (unshare → `CaptureError::None`, state Inactive, `surfaceCount()==0`, `isShared()==false`, all bounded waits satisfied). Session 0 @ `191caa2`: `RWH status=build_ok`; `100% tests passed out of 213` — **212 passed + #213 `WgcCapture.HermeticConsentGatedPipeline` Skipped by design** (2.06 s), `Total Test time (real) = 18.44 sec`, `RWH ctest_exit=0`, `RWH status=tests_ok`. macOS @ `191caa2`: **194/194 CTest** (1.77 s, exit 0). SDK 26100 doc-check findings (2026-11-27, verified against installed headers on the runner): `DirectXPixelFormat::B8G8R8A8UIntNormalized = 87` in `10.0.26100.0\cppwinrt\winrt\impl\windows.graphics.directx.0.h` (= the compositor's frame format — the pool format list was never the starve suspect) and `ID3D11DeviceContext::CopyResource` returns `void` + throws (`10.0.26100.0\um\d3d11.h:8083`) — pre-26100 `FAILED(CopyResource(...))` usage is C2440. PC cleanup: `rwh_wgc_diag` scheduled task deleted (only pre-existing `rwh_probe`/`rwh_winreg`/`rwh_winreg_test` remain), `C:\rwh\wgc_diag.log` removed, no stray processes; runner checkout left at `191caa2` (clean). |
 
 | RW-H-013 — loopback-E2E SEGFAULT flake class: root cause + fix (2026-11-27; branch `agent/H-NET/RW-H-013`, base main @ `c62c5e04d9d87df58ccd22ca1b87bff29099178e`, fix SHA `8989997e2ca0daba155a880fb0ecc9ce96af33ea`; pushed, NOT merged) | **Root cause** (code-level, `network/signaling_server.{hpp,cpp}` — H-NET-owned): `SignalingServer::acceptLoop` spawned one **DETACHED** worker thread per accepted connection (including the throwaway "poke" connection that `stop()` itself triggers to unblock `accept()`); `stop()` joined only the accept thread and returned while workers could still run their epilogue — reading `this->running_`/`malformed_`/`envelopes_`, calling `handler_->onDisconnection()` through the raw `Handler*`, and locking the destroyed `conns_mutex_` plus the handler's own mutex + `sessions_` map → **use-after-free of the E2E fixture's stack handler and of the server itself**. The production app already worked around the race with a blind 150 ms sleep after `stop()` (`AppController::drainConnectionWorkers`, comment: "the detached workers may briefly run onDisconnection after stop()"); the E2E test fixtures have no such sleep, so the race surfaced there. Windows-only probability = session-0 thread scheduling vs the main thread's stack unwind; the UB exists on both platforms. **Reproduction** @ base `c62c5e0` (runner `build` → `RWH status=build_ok`; direct-ssh `ctest -R` single-member loops, 4 members × 10 runs): `SignalingE2E.MalformedFramesCountedNotCrash` **crashed in isolation** on iteration 1 — verbatim: `[ RUN ] SignalingE2E.MalformedFramesCountedNotCrash` → `[       OK ] SignalingE2E.MalformedFramesCountedNotCrash (1 ms)` → `[  PASSED  ] 1 test.` → then `1/1 Test #147: SignalingE2E.MalformedFramesCountedNotCrash ...***Exception: SegFault  0.01 sec`. The member's own test body ALWAYS passes; the fault is in that member's process teardown/exit (worker outlives the fixture) — which is why ctest blames a different member per run (the other 3 members: 30/30 green in this pass; the `SessionAuthE2E.*` members were hit in prior runs at equivalent code — see the RW-H-011 row and the header above). **Fix** `8989997` (2 files, +30/−1, no CMake change): track the per-connection worker threads in the server (`workers_`, never detached) and JOIN them all in `stop()` after the connection sockets are closed (closing first unblocks any worker blocked in `recv()`); a worker never erases its own live handle — destroying a joinable `std::thread` calls `std::terminate` (found live on macOS during development: all 7 E2E members aborted until corrected); `stop()` owns the join and leaves the list empty, so it cannot grow between start()/stop() cycles. After `stop()` returns, no worker can touch the server or the handler; destruction is safe. The app-layer 150 ms sleep remains as redundant margin (`app/` = H-FOUND-owned; not touched). **Stability gate @ `8989997`**: macOS **194/194 CTest** (RelWithDebInfo, Ninja; plus 40/40 local stress runs of the 4 formerly-observed members, 10 each); Windows runner (session 0): `build` → `RWH sha=8989997...`, `RWH status=build_ok`; **5 CONSECUTIVE** `unit-tests` runs, each `RWH sha=8989997e2ca0daba155a880fb0ecc9ce96af33ea`, `100% tests passed out of 213` (= 212 passed + #213 `WgcCapture.HermeticConsentGatedPipeline` skipped by design), `Total Test time (real)` 18.50 / 18.43 / 18.46 / 18.39 / 18.52 s, `RWH ctest_exit=0`, `RWH status=tests_ok`; **5×5 single-member matrix** (direct-ssh ctest: the 4 formerly-observed members × 5 runs each) — all 20 runs `100% tests passed out of 1`. Suite size unchanged (213); no test skipped/removed/disabled; runner checkout left at `8989997` (clean). |
+| RW-H-012 — H.264 encoder backend (2026-11-28; branch `agent/H-MEDIA/RW-H-012`, base `6ae8123`, final code tip `61ceaa0`; NOT merged) | caller-driven MFT refactor (the backend owns NO thread — RW-H-013 lesson): `setupMft`/`releaseSetup` (always-EOS-safe teardown = the `0xC0000409` mid-stream-release fix), throwaway `tryCandidate` smoke on a disposable MFT (8-frame burst → 8 outputs → verify first AU = SEI+SPS+PPS+IDR → EOS → release), `startInner` adopts a SEPARATE fresh MFT (client's first frame = first AU, §9.5), public caller-driven `pumpUntil`, `encodeFrame`/`requestKeyframe`/`stop` without a pump thread, `drop_until_` removed, hpp no-thread contract, encoder tests → 8-frame burst + pump-wait + honest keyframe skip, live driver wait budget bumped | **MSVC `build_ok`** (3 real test-TU fixes: `feedBurst` deref C2664×5, chained-assign C2440 type leak, LNK1168 leftover exe); **session-0 `unit-tests` @ `61ceaa0`: `RWH sha=61ceaa0…`, `100% tests passed out of 219` = 213 passed + 6 honest skips (4 encoder + 2 WGC consent) + 0 failed, `RWH ctest_exit=0`, `RWH status=tests_ok`** (`CandidateSurvey` PASSES in session 0); **INTERACTIVE (console session 6): `CandidateSurvey` PASS (MS-AVC DX12 selected); `EncodeSyntheticFrames`/`ReconfigureSizeMidStream` FAIL (`SEH 0xc0000005` in test body); `OnDemandKeyframe` hard-crashed the process; `CleanShutdownWithPendingFrames` NOT RUN; live `--wgc-h264` crashed during the smoke (0 frames). One bounded fix round (early `BeginGetEvent` re-arm + no `ResetEvent` race + no pre-pump, matching the working smoke) did NOT clear the `0xc0000005` — the production encode path is NOT verified-working on this PC (root cause needs an MSVC-debugger session; the throwaway smoke DOES work). Full detail + the measured ≤8-frame batch envelope + the HONEST encoder correction (NVIDIA 30/30 uncorroborated / D3D11 dead / QSV dead / MS-AVC DX12 = only working path) in the RW-H-012 section below. |
+
+## H.264 encoder backend (RW-H-012, H-MEDIA) — IMPLEMENTED; interactive encode path BLOCKED (2026-11-28)
+
+The in-tree H.264 encoder backend (`win32/video/h264_encoder_mf.{hpp,cpp}`,
+`MfH264Encoder` over the Media Foundation `IMFTransform`) is now a
+**caller-driven** design (RW-H-013 lesson — the backend owns **NO
+thread**; every `IMFTransform`/`IMFMediaEventGenerator` call runs on the
+calling thread; the only foreign entry point is the MFT async callback
+`EventSink::Invoke` on an MF worker thread, which touches only a
+critical-section-guarded pending slot). Branch `agent/H-MEDIA/RW-H-012`,
+base `6ae8123`, final code tip `61ceaa0` (+ docs).
+
+**What was built (the caller-driven refactor):**
+- `setupMft()` — activate a candidate MFT, unlock the async transform
+  (`MF_TRANSFORM_ASYNC_UNLOCK`), attach a D3D12 device manager for
+  "Microsoft AVC" (the measured-required D3D12 path), negotiate output
+  (size+rate) / input (NV12 size-only) types, prime `BeginGetEvent`,
+  send `NOTIFY_START_OF_STREAM`; returns a self-contained `MftSetup`
+  (touches no encoder state).
+- `releaseSetup()` — safe teardown: `NOTIFY_END_OF_STREAM` + bounded
+  drain + release. This is the **`0xC0000409` mid-stream-release crash
+  fix** — the MFT is ALWAYS EOS'd before release (the old code released
+  a mid-stream MFT and the MFT's worker thread hit a torn-down
+  COM object).
+- `tryCandidate()` — a **throwaway smoke on a FRESH disposable MFT**:
+  feed an 8-frame burst (the measured healthy limit), pull 8 outputs,
+  verify the first access unit is a valid Annex-B SEI+SPS+PPS+IDR,
+  then EOS + release. The candidate is NEVER adopted.
+- `startInner` — adopts a **SEPARATE FRESH MFT** via `setupMft` for the
+  production stream, so the client's first frame is the first input and
+  the first access unit (PROTOCOL §9.5 first-packet rule, structurally
+  satisfied; **no retained/dropped smoke frames** in the production
+  stream — the smoke-tail sequence bug is removed by construction).
+- `pumpUntil(uint32_t)` — public, caller-driven; dispatches pending MFT
+  events on the calling thread (the ONLY delivery path). `encodeFrame`
+  (NOTACCEPTING back-pressure via `pumpUntil`), `requestKeyframe`
+  (DrainComplete-wait via `pumpUntil`), and `stop()` **WITHOUT a pump
+  join** (the wedge-leak is kept as a bounded defense; the pump-thread
+  defect that caused a 4-min `stop()` hang on a wedged MFT is removed).
+  `drop_until_` removed.
+- `h264_encoder_mf.hpp` — updated to the no-thread contract;
+  `pump_thread_`/`pump_stop_`/`pumpLoop`/`drop_until_` removed.
+- Encoder tests (`tests/win32_h264_encoder_test.cpp`) — moved to the
+  8-frame burst + caller-driven `waitForFrames` (pumps during the wait)
+  + clean `stop()` pattern; `source_seq == i`; test 4 (on-demand
+  keyframe) honest-SKIPs (mid-stream `COMMAND_FLUSH` is measured-wedged
+  on this PC; the stream-start IDR is natural in the new design). Live
+  driver (`tests/win32_wgc_capture_test.cpp`) wait budget bumped (a
+  `start()` now costs one throwaway smoke ≈ 15–25 s); existing WGC
+  assertions untouched.
+
+**Build (MSVC 14.51 / SDK 10.0.26100, RelWithDebInfo, Ninja):**
+`build_ok` after 3 real fixes found by the runner (plan rule 2, all in
+the test TU): (a) `feedBurst` passed a `std::unique_ptr` where an
+`MfH264Encoder&` was expected (C2664 ×5) → deref; (b) a chained
+`a=b=…=nullptr` assignment leaked an `IMFMediaType*` into an
+`ID3D12Device*` slot (C2440) → split into individual assignments;
+(c) `LNK1168` (a leftover interactive `win32_wgc_capture_test.exe` held
+the exe) → killed by PID. (A prior namespace-include build incident on
+this file — a display-mangled `win32::` include — is resolved; every
+upload is now SHA256 round-trip verified.)
+
+**Session-0 runner gate @ `61ceaa0` (final code tip):**
+`windows-runner.sh unit-tests` → `RWH sha=61ceaa0…`, **`100% tests
+passed out of 219` = 213 passed + 6 skipped + 0 failed**,
+`RWH ctest_exit=0`, `RWH status=tests_ok`. The 6 honest session-0
+skips: `H264EncoderMf.{EncodeSyntheticFrames, ReconfigureSizeMidStream,
+OnDemandKeyframe, CleanShutdownWithPendingFrames}` (the encode tests
+need an interactive GPU/D3D12 context — session 0 has none; they SKIP,
+they do not fake-pass) + `WgcCapture.HermeticConsentGatedPipeline` +
+`WgcCaptureH264.LiveWgcEncodeToH264` (consent-gated live capture).
+`H264EncoderMf.CandidateSurvey` **PASSES** in session 0 (pure MFT
+enumeration). MS-AVC session-0 availability: UNVERIFIED by design (the
+smoke that would exercise it skips).
+
+**Interactive session (console session 6, user ninzalo; ONE recorded
+run, `schtasks` delete+recreate, 300 s cap) @ `61ceaa0`:**
+- `H264EncoderMf.CandidateSurvey`: **PASS** (812 ms; 4 candidates,
+  "Microsoft AVC DX12 Encoder" `activatable=1`).
+- `H264EncoderMf.EncodeSyntheticFrames`: **FAIL** — `SEH exception
+  0xc0000005` in the test body, ~19 s, immediately after
+  `selected=Microsoft AVC DX12 Encoder` (the throwaway smoke
+  SUCCEEDED; the fault is on the production MFT's first output).
+- `H264EncoderMf.ReconfigureSizeMidStream`: **FAIL** — same
+  `0xc0000005`, ~33 s.
+- `H264EncoderMf.OnDemandKeyframe`: **FAIL** — hard-crashed the process
+  (the log truncates after `selected=`; the SEH handler did not return
+  for this member).
+- `H264EncoderMf.CleanShutdownWithPendingFrames`: **NOT RUN** (the
+  process died in the prior member).
+- `win32_wgc_capture_test --wgc-h264` (LIVE): **FAIL/BLOCKED** —
+  consent granted (`WgcCapture.HermeticConsentGatedPipeline` OK, 286
+  ms) but the process crashed during the candidate smoke (before
+  `selected=`), so 0 encoded frames were produced.
+- **One bounded fix round** (allowed max 1): `dispatchEvent` re-armed
+  `BeginGetEvent` early (right after `EndGetEvent`, before processing —
+  matching the proven-working `pull_one_output` smoke) + removed the
+  tail `ResetEvent` (it raced `Invoke`'s `SetEvent` and could drop the
+  event signal) + removed `encodeFrame`'s 20 ms pre-pump (a
+  pull-while-feeding pattern = a measured hard-fault trigger). Rebuilt
+  `build_ok`, re-ran → **the crash persists identically** (~19 s /
+  ~33 s, same `0xc0000005`). The fix-round changes are still the
+  correct control flow and are committed in the tip.
+
+**Root cause (honest — NOT isolated within the bounded budget):**
+The throwaway smoke (`tryCandidate` / `pull_one_output`, a disposable
+MFT) WORKS — it produces 8 valid Annex-B access units and selects
+"Microsoft AVC DX12 Encoder." The production encode path
+(`dispatchEvent` / `pumpUntil` / `deliverOutput`, the persistent MFT
+held as encoder state) deterministically faults with `0xc0000005`
+(access violation) on the first output; the gtest SEH handler reports
+an **EMPTY** stack trace, so the exact faulting dereference is not
+visible from the log. Matching `dispatchEvent` to the working smoke's
+control flow (fix round 1) did not clear it. A definitive root cause
+requires an MSVC-debugger (`cdb`/`windbg`) session against the
+`0xc0000005` — out of scope for this task's one-round fix budget. The
+crash is reported as-is (not as a pass, not as "environment only"):
+the caller-driven production encode path is **NOT verified-working on
+this PC**.
+
+**Measured encoder envelope (2026-11-28, this PC — environment
+constraint, NOT a code defect):**
+- Working encoder = **"Microsoft AVC DX12 Encoder"** (in-box Microsoft;
+  D3D12 device manager required; output type needs size+rate, input
+  NV12 size-only).
+- ONLY reliably healthy mode: **8-frame burst → 8 outputs** (first AU =
+  SEI+SPS+PPS+IDR, valid Annex-B) → `END_OF_STREAM` → release → clean
+  exit 0 (probe7e state).
+- WEDGES or hard-kills (silent, no MEError; exit 3/-1, no WER): pulling
+  output #1 early while feeding more input; mid-stream `COMMAND_FLUSH`
+  (20 s, zero frames); mid-lifetime EOS+SOS restart (no new IDR in 30
+  s); draining a smoke tail before the client stream; sustained input
+  interleaved with pulling past ~24 outputs.
+- **NVIDIA H.264 MFT: the earlier "30/30 @ 30 fps" claim is
+  UNCORROBORATED** — all 80 probe logs on this PC show 0 encoded bytes.
+  The NVIDIA MFT needs D3D11 texture input; **D3D11 is DEAD on this PC**
+  (`E_INVALIDARG` for every adapter incl. WARP, despite the RTX 5080
+  being present — the 24H2→26H2 upgrade changed the D3D11 surface).
+  **Intel Quick Sync: dead state** (`NO_SAMPLE` all contexts; the smoke
+  returns `smoke_queue_full` / `negotiate_failed=C00D3E85`). **MS-AVC
+  DX12 is the ONLY working path**, with the measured ≤8-frame batch
+  envelope above.
+- **CONSEQUENCE (app-layer, H-FOUND):** real-time sustained interleaved
+  encoding is unavailable on this PC. The app layer must own frame
+  pacing / backpressure and stream re-establish (EOS → fresh MFT → IDR)
+  when the ≤8-frame batch envelope is exceeded.
+
+**Format pin (verified earlier; doc-check 2026-11-28):** raw Annex-B,
+4-byte `00 00 00 01` start codes, SPS/PPS in-band in the first keyframe
+AU, IDR at stream start / after flush. Host encoder output
+`win32/video/h264_encoder_mf.cpp`; host media-channel framing
+`media/media_framing.hpp:16-42` (13-byte §9.4 header + AES-256-GCM
+ciphertext — the Annex-B AU is the plaintext payload); Client
+`remote-windows-client/Sources/RemoteWindowsApp/Video/VideoPipeline.swift:10-21,131-166,226`
+(VideoToolbox decoder expects the in-band SPS/PPS).
+
+**Limitations (honest):**
+- Session-0: the 4 encode tests + 2 WGC live tests SKIP (no interactive
+  GPU/consent in session 0) — as measured; `CandidateSurvey` passes.
+- Mid-stream on-demand keyframe: `COMMAND_FLUSH` is measured-wedged on
+  this PC → test 4 honest-SKIPs (the stream-start IDR is natural in the
+  new design).
+- The interactive production encode path crashes (`0xc0000005`) on this
+  PC — see the root-cause note above.
+- Real-time pacing / backpressure / stream re-establish is the
+  app-layer's job (H-FOUND) — the encoder deliberately owns no thread
+  and no pacing.
+
+**Next dependency (H-FOUND):** app-layer wiring (registry + capture +
+encoder → `rwh-host.exe`; `WINDOW_ANNOUNCE` + media handshake). Because
+the measured healthy envelope is a **≤8-frame batch** (feed 8 → pull 8
+→ EOS), the app layer MUST design frame pacing / backpressure and
+stream re-establish (EOS → fresh MFT → IDR) around that envelope — NOT
+sustained real-time interleaved encode. Additionally, the interactive
+`0xc0000005` on the caller-driven production path needs a dedicated
+MSVC-debugger root-cause task BEFORE the encoder can be trusted in the
+real app (the smoke/selection path is verified-working; the production
+stream path is not).
 
 ## Windows Host app shell (H-FOUND) — verified
 
@@ -413,9 +604,18 @@ Windows runner (DESKTOP-PC), 2026-11-24:
    never pushed to the sink; full stage tables in the Windows runner table
    above; branch INTEGRATED into main @ `afcfd1c` — continue with the
    remaining items).
-   Remaining: (a) the H.264 encoder backend (RW-H-012 — no in-tree
-   H.264 encoder; the seam wraps a factory without a concrete backend); (b) H-FOUND
-   app-layer wiring. (The RW-H-010 window registry merged into main @
+   Remaining: (a) the H.264 encoder backend (RW-H-012) — IMPLEMENTED as a
+   caller-driven MFT backend on branch `agent/H-MEDIA/RW-H-012` @ `61ceaa0`
+   (full detail in the RW-H-012 section above): MSVC `build_ok`, session-0
+   runner green (213 passed + 6 honest session-0 skips), throwaway candidate
+   smoke verified (selects "Microsoft AVC DX12 Encoder"), BUT the interactive
+   PRODUCTION encode path crashes `0xc0000005` on this PC — NOT
+   verified-working; the measured healthy envelope is a ≤8-frame batch
+   (feed 8 → pull 8 → EOS); a dedicated MSVC-debugger root-cause task is
+   needed before the production stream path can be trusted. (b) H-FOUND
+   app-layer wiring — MUST design frame pacing / backpressure / stream
+   re-establish (EOS → fresh MFT → IDR) around the ≤8-frame batch envelope
+   (sustained real-time interleaved encode is unavailable on this PC). (The RW-H-010 window registry merged into main @
    `c97bbbf48f3d2aa5bb7de9abc5d41922c8a4174c` on 2026-11-27: merged-revision
    178/178 macOS CTest + Windows runner build_ok + 196/196 @ `c97bbbf`;
    pre-merge branch evidence @ `6ea4591` in the Windows runner table above.)
