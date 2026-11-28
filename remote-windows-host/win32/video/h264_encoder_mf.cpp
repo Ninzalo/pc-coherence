@@ -313,9 +313,15 @@ ULONG EventSink::Release() {
 }
 
 // SDK 26100 vtable (mfobjects.h): GetParameters + Invoke.
+// QUEUE: MFASYNC_CALLBACK_QUEUE_MULTITHREADED (measured value 5,
+// mfobjects.h:4060-4068) - the callback lands on an MF worker thread;
+// no message pump needed. Measured: MFASYNC_CALLBACK_QUEUE_STANDARD
+// (1) on a bare MTA thread (no pump) never delivered Invoke, so the
+// smoke encode always timed out ("no_output_in_smoke") even with a
+// working NVIDIA MFT - the queue had to be MULTITHREADED.
 HRESULT EventSink::GetParameters(DWORD* flags, DWORD* queue) {
   if (flags) *flags = 0;
-  if (queue) *queue = MFASYNC_CALLBACK_QUEUE_STANDARD;
+  if (queue) *queue = MFASYNC_CALLBACK_QUEUE_MULTITHREADED;
   return S_OK;
 }
 
@@ -536,42 +542,14 @@ bool MfH264Encoder::tryCandidate(IMFActivate* act, const std::string& name,
     attrs->SetUINT32(MF_TRANSFORM_ASYNC_UNLOCK, 1);
   }
 
-  // D3D11 manager: best effort. The NVIDIA MFT encoded fine WITHOUT
-  // one (measured); the QSV MFT accepted one but produced no output
-  // anyway — a failure here is not fatal.
+  // D3D11 manager: NOT SET (removed): the NVIDIA MFT encodes fine
+  // without one (probe phase). The un-removed build died inside
+  // start() on the dev PC (clean exit 3, no WER event; reproducible,
+  // both test exes, interactive session) with this GPU-driver path
+  // active - it was the only untested step in start(), so it is
+  // removed rather than shipped unverified.
   IMFDXGIDeviceManager* mgr = nullptr;
   ID3D11Device* dev = nullptr;
-  {
-    D3D_FEATURE_LEVEL fl[2] = {D3D_FEATURE_LEVEL_11_1,
-                               D3D_FEATURE_LEVEL_11_0};
-    D3D_FEATURE_LEVEL used = D3D_FEATURE_LEVEL_11_0;  // out-param; SDK 26100
-    // removed the D3D_FEATURE_LEVEL_UNKNOWN enumerator
-    ID3D11DeviceContext* ctx = nullptr;
-    if (SUCCEEDED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE,
-                                    nullptr, 0, fl, 2, D3D11_SDK_VERSION,
-                                    &dev, &used, &ctx))) {
-      UINT rt = 0;
-      if (SUCCEEDED(MFCreateDXGIDeviceManager(&rt, &mgr)) && mgr) {
-        mgr->ResetDevice(dev, rt);
-      } else {
-        dev->Release();
-        dev = nullptr;
-      }
-      if (ctx) ctx->Release();
-    } else {
-      dev = nullptr;
-    }
-  }
-  if (mgr) {
-    HRESULT hs = t->ProcessMessage(MFT_MESSAGE_SET_D3D_MANAGER,
-                                   reinterpret_cast<ULONG_PTR>(mgr));
-    if (FAILED(hs)) {
-      mgr->Release();
-      dev->Release();
-      mgr = nullptr;
-      dev = nullptr;
-    }
-  }
 
   auto fail = [t, attrs, mgr, dev](std::string* d, const char* msg,
                                    HRESULT hr) {
@@ -1016,6 +994,16 @@ void MfH264Encoder::requestKeyframe() {
 
 std::vector<MfEncoderCandidate> MfH264Encoder::surveyCandidates() {
   std::vector<MfEncoderCandidate> out;
+  // ActivateObject is a COM call: the calling thread needs an
+  // apartment. Measured (dev PC, interactive session, SDK 26100): on
+  // a bare gtest main thread (no CoInitializeEx) every candidate
+  // (including the working NVIDIA MFT) reported activate=0x800401F0
+  // (CO_E_NOTINITIALIZED), masking real availability. Same pattern as
+  // start(): init here only when this call did.
+  bool com_here = false;
+  if (SUCCEEDED(CoInitializeEx(nullptr, COINIT_MULTITHREADED))) {
+    com_here = true;
+  }
   MFT_REGISTER_TYPE_INFO filter;
   memset(&filter, 0, sizeof(filter));
   filter.guidMajorType = MFMediaType_Video;
@@ -1026,7 +1014,10 @@ std::vector<MfEncoderCandidate> MfH264Encoder::surveyCandidates() {
                         MFT_ENUM_FLAG_SYNCMFT | MFT_ENUM_FLAG_ASYNCMFT |
                             MFT_ENUM_FLAG_HARDWARE,
                         nullptr, &filter, nullptr, &arr, &count);
-  if (FAILED(he) || !arr) return out;
+  if (FAILED(he) || !arr) {
+    if (com_here) CoUninitialize();
+    return out;
+  }
   for (UINT32 i = 0; i < count; i++) {
     MfEncoderCandidate c;
     LPWSTR nm = nullptr;
@@ -1054,6 +1045,7 @@ std::vector<MfEncoderCandidate> MfH264Encoder::surveyCandidates() {
     out.push_back(std::move(c));
   }
   CoTaskMemFree(arr);
+  if (com_here) CoUninitialize();
   return out;
 }
 
