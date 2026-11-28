@@ -114,7 +114,7 @@ endif()
 if(WIN32)
   add_library(rwh_win32_video STATIC win32/video/h264_encoder_mf.cpp)
   target_link_libraries(rwh_win32_video
-                        PUBLIC rwh_core mfplat mf mfuuid d3d11 dxgi
+                        PUBLIC rwh_core mfplat mf mfuuid d3d11 d3d12 dxgi
                         ole32 oleaut32)
 endif()
 
